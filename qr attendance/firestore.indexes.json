@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "attendance",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "guardianEmail", "order": "ASCENDING" },
+        { "fieldPath": "logDay", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

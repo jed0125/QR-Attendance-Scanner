@@ -1,68 +1,133 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>QR Scanner — QR Attendance</title>
-  <link rel="stylesheet" href="css/styles.css" />
-</head>
-<body>
-  <main class="container">
-    <header>
-      <h1>QR Scanner</h1>
-      <p class="subtitle" id="teacher-name-sub">Teacher</p>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0B1722">
+    <title>Gate Scanner — School attendance</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2228%22%20height%3D%2228%22%20viewBox%3D%220%200%2028%2028%22%20fill%3D%22none%22%20stroke%3D%22%237FD6BE%22%20stroke-width%3D%222%22%3E%3Crect%20x%3D%223%22%20y%3D%223%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%2217%22%20y%3D%223%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%223%22%20y%3D%2217%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Cpath%20d%3D%22M17%2017h3v3h-3zM22%2022h3M22%2017v2%22%2F%3E%3C%2Fsvg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+<script
+      src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"
+      integrity="sha512-VwOIT9JjLtO0IqV9BZq2O9y7Yz9eJ6lJ6eJ6lJ6eJ6lJ6eJ6lJ6eJ6lJ6eJ6lJ6eJ6lJ6eJ6lJ6eJ6lJ6eJ6="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+      defer
+    ></script>
+    <script type="module" src="js/site-config.js"></script>
+    <script type="module" src="js/scanner.js"></script>
+  </head>
+  <body class="page-scanner">
+    <header class="scanner-header" role="banner">
+      <div class="scanner-header-inner">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <svg class="logo-mark" width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <rect x="3" y="3" width="8" height="8" rx="1"/>
+            <rect x="17" y="3" width="8" height="8" rx="1"/>
+            <rect x="3" y="17" width="8" height="8" rx="1"/>
+            <path d="M17 17h3v3h-3zM22 22h3M22 17v2"/>
+          </svg>
+          <div>
+            <div class="scanner-eyebrow">GATE SCANNER</div>
+            <div class="scanner-teacher" id="staff-name">Teacher</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <a href="dashboard.html" class="nav-link" style="color: #B9C7D6;">Dashboard</a>
+          <button type="button" class="btn btn-outline" id="signout-button" style="color: #ffffff; border-color: rgba(255, 255, 255, 0.4); font-size: 0.875rem; padding: 6px 14px;">Sign out</button>
+        </div>
+      </div>
     </header>
 
-    <!-- Nav bar -->
-    <nav class="nav-bar" aria-label="Teacher navigation">
-      <a href="scanner.html" class="nav-link active" aria-current="page">Scanner</a>
-      <a href="approvals.html" class="nav-link">Approvals</a>
-      <button type="button" id="nav-sign-out" class="nav-link nav-link-btn">Sign Out</button>
-    </nav>
+    <main class="page-shell" id="main-content" hidden style="padding-top: 16px;">
+      <section class="scanner-section" aria-labelledby="scanner-heading">
+        <h2 id="scanner-heading" class="visually-hidden">Gate Scanner</h2>
 
-    <!-- Mode toggle -->
-    <div class="card" style="margin-bottom: 16px;">
-      <p class="subtitle" style="margin: 0 0 10px;">Attendance Mode</p>
-      <div class="actions" style="justify-content: flex-start;">
-        <button type="button" id="mode-in" class="btn btn-primary" aria-pressed="true">Time In</button>
-        <button type="button" id="mode-out" class="btn btn-secondary" aria-pressed="false">Time Out</button>
-      </div>
-    </div>
+        <!-- Segmented Mode Control -->
+        <div class="scanner-segmented" role="group" aria-label="Scan mode">
+          <button
+            type="button"
+            class="segmented__button"
+            id="time-in-button"
+            aria-pressed="true"
+            data-mode="time_in"
+          >
+            Time In
+          </button>
+          <button
+            type="button"
+            class="segmented__button"
+            id="time-out-button"
+            aria-pressed="false"
+            data-mode="time_out"
+          >
+            Time Out
+          </button>
+        </div>
 
-    <!-- Camera -->
-    <div class="card" style="margin-bottom: 16px;">
-      <div id="camera-container">
-        <div id="qr-reader" style="width: 100%; max-width: 400px; margin: 0 auto;"></div>
-        <p id="camera-status" class="hint">Initializing camera…</p>
-      </div>
-      <div class="actions" style="margin-top: 12px;">
-        <button type="button" id="toggle-camera-btn" class="btn btn-secondary">Switch Camera</button>
-      </div>
-    </div>
+        <!-- Camera Panel with Corner Brackets & Scan Line -->
+        <div class="camera-area">
+          <div class="camera-view" id="camera-view" aria-label="Camera view for QR code scanning"></div>
+          <div class="scanner-overlay" aria-hidden="true">
+            <svg class="scanner-corners-svg" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round">
+              <path d="M 6 18 L 6 6 L 18 6" />
+              <path d="M 82 6 L 94 6 L 94 18" />
+              <path d="M 6 82 L 6 94 L 18 94" />
+              <path d="M 82 94 L 94 94 L 94 82" />
+            </svg>
+            <div class="scan-line"></div>
+          </div>
+          <p class="scan-caption">Point the camera at the student's QR</p>
+        </div>
 
-    <!-- Result card -->
-    <div id="scan-result" class="card" hidden>
-      <h2>Scan Result</h2>
-      <div id="scan-result-content"></div>
-    </div>
+        <!-- Small Outline Camera Switch Button -->
+        <div class="camera-controls">
+          <button type="button" class="btn btn-outline btn-sm" id="camera-switch-button" style="color: #B9C7D6; border-color: rgba(185, 199, 214, 0.4);">
+            Switch to front camera
+          </button>
+        </div>
 
-    <!-- Session list (today's logs) -->
-    <div class="card" style="margin-top: 16px;">
-      <h2>Today's Logs</h2>
-      <div id="scan-list" class="scan-list empty-state">
-        <p class="hint">Loading…</p>
-      </div>
-    </div>
+        <p class="form-message" id="scan-message" role="status" aria-live="polite" style="text-align: center;"></p>
 
-    <footer>
-      <p>QR Attendance System — Phase 3</p>
+        <!-- Result Card (White / Rejection Variants) -->
+        <div class="scanner-result-card" id="result-card" hidden>
+          <div class="result-card__label" id="result-label">LAST SCAN</div>
+          <div class="result-card__head">
+            <span class="chip chip--present" id="result-chip">TIME IN</span>
+            <span class="result-card__time" id="result-time"></span>
+          </div>
+          <h3 class="result-card__name" id="result-text"></h3>
+          <p class="result-card__status-line" id="email-status" hidden></p>
+        </div>
+      </section>
+
+      <!-- Earlier Today Section -->
+      <section class="earlier-today-section" aria-labelledby="logs-title">
+        <h2 id="logs-title" class="earlier-today-title">EARLIER TODAY</h2>
+        <p class="form-message" id="logs-message" role="status" aria-live="polite"></p>
+        <div style="width: 100%;">
+          <table class="earlier-today-table" id="logs-table">
+            <thead>
+              <tr>
+                <th scope="col">Student</th>
+                <th scope="col">Time</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody id="logs-body">
+              <!-- Rows inserted by JavaScript -->
+            </tbody>
+          </table>
+        </div>
+        <p class="empty-state" id="logs-empty-state" style="color: #7A90A4;" hidden>No attendance logs for today</p>
+      </section>
+    </main>
+
+    <footer class="page-footer" id="page-footer" hidden style="color: #7A90A4; border-color: rgba(195, 206, 218, 0.15);">
+      Your information is used for school attendance purposes.
     </footer>
-  </main>
-
-  <script src="js/config.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/html5-qrcode@3.10.0" crossorigin="anonymous"></script>
-  <script src="js/auth.js"></script>
-  <script src="js/scanner.js"></script>
-</body>
+  </body>
 </html>

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CSV Export Tests</title>
+    <style>
+      body { font-family: monospace; padding: 20px; max-width: 900px; margin: 0 auto; }
+      .pass { color: #28745e; }
+      .fail { color: #b42318; }
+      .test { margin: 8px 0; padding: 8px; border-left: 4px solid #cbd8d2; }
+      .test.pass { border-color: #28745e; background: #f5faf7; }
+      .test.fail { border-color: #b42318; background: #fdeaea; }
+      h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+      .summary { font-weight: bold; margin-top: 1rem; padding: 1rem; background: #f5faf7; border-radius: 8px; }
+      pre { background: #f5faf7; padding: 8px; border-radius: 6px; font-size: 0.85rem; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>CSV Export Tests</h1>
+    <div id="results"></div>
+    <div class="summary" id="summary"></div>
+    <script type="module">
+      import { toCsv, downloadCsv } from "../js/csv.js";
+
+      let passCount = 0;
+      let failCount = 0;
+
+      function assert(condition, message) {
+        const div = document.createElement("div");
+        div.className = "test " + (condition ? "pass" : "fail");
+        div.textContent = (condition ? "\u2713 PASS: " : "\u2717 FAIL: ") + message;
+        document.getElementById("results").appendChild(div);
+        if (condition) passCount++; else failCount++;
+        return condition;
+      }
+
+      function assertEqual(actual, expected, message) {
+        const ok = actual === expected;
+        const msg = ok ? message : message + ` (expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)})`;
+        return assert(ok, msg);
+      }
+
+      // --- toCsv content tests ---
+
+      // toCsv expects string[][]: an explicit header row plus data rows.
+      let csv = toCsv([
+        ["Name", "Note"],
+        ["Alice", "Present"],
+        ["Bob, Jr.", "Late, excused"],
+        ["Diana \"Dee\"", 'Said "hello" there'],
+        ["Eve", "Line1\nLine2"],
+        ["=1+1", "+100"],
+        ["-5", "@mention"],
+        ["\tcell", "\rhere"]
+      ]);
+
+      assertEqual(csv.split("\r\n")[0], '\uFEFF"Name","Note"', "header: every field quoted with BOM");
+      assertEqual(csv.split("\r\n")[1], '"Alice","Present"', "plain field quoted");
+      assert(csv.includes('"Bob, Jr."'), "comma inside field kept inside quotes");
+      assert(csv.includes('"Diana ""Dee"""'), "inner quotes doubled");
+      assert(csv.includes("Line1\nLine2"), "newline inside field preserved inside quotes");
+      assert(csv.includes("'=1+1"), "formula = prefixed with single quote");
+      assert(csv.includes("'+100"), "formula + prefixed with single quote");
+      assert(csv.includes("'-5"), "formula - prefixed with single quote");
+      assert(csv.includes("'@mention"), "formula @ prefixed with single quote");
+      assert(csv.includes("'\tcell"), "leading tab prefixed with single quote");
+      assert(csv.includes("'\rhere"), "leading carriage return prefixed with single quote");
+
+      // Empty input
+      assertEqual(toCsv([]), "\uFEFF", "empty array returns BOM only");
+      assertEqual(toCsv(null), "\uFEFF", "null returns BOM only");
+
+      // --- downloadCsv / BOM tests (stub the download) ---
+
+      let capturedBlob = null;
+      let anchorClicked = false;
+      let downloadedFilename = null;
+      let revoked = false;
+
+      const realCreateObjectURL = URL.createObjectURL;
+      const realClick = HTMLAnchorElement.prototype.click;
+      const realRevoke = URL.revokeObjectURL;
+      URL.createObjectURL = (blob) => {
+        capturedBlob = blob;
+        return "blob:fake-test-url";
+      };
+      HTMLAnchorElement.prototype.click = function () {
+        anchorClicked = true;
+        if (this.download) downloadedFilename = this.download;
+      };
+      URL.revokeObjectURL = () => { revoked = true; };
+
+      try {
+        downloadCsv("attendance-report", [
+          ["Student", "Rate"],
+          ["Alice", "92%"]
+        ]);
+      } finally {
+        URL.createObjectURL = realCreateObjectURL;
+        HTMLAnchorElement.prototype.click = realClick;
+        URL.revokeObjectURL = realRevoke;
+      }
+
+      assert(anchorClicked, "downloadCsv triggers a click");
+      assertEqual(downloadedFilename, "attendance-report.csv", "filename gets .csv extension");
+
+      capturedBlob.text().then((text) => {
+        assert(text.startsWith("\uFEFF"), "downloaded blob starts with UTF-8 BOM");
+        assert(text.includes('"Alice"'), "blob contains quoted CSV content");
+
+        const summaryDiv = document.getElementById("summary");
+        summaryDiv.textContent = `Total: ${passCount + failCount} | Pass: ${passCount} | Fail: ${failCount}`;
+        summaryDiv.className = "summary " + (failCount > 0 ? "fail" : "pass");
+      }).catch((err) => {
+        assert(false, "blob text readable: " + err.message);
+      });
+    </script>
+  </body>
+</html>

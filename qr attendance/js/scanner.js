@@ -1,363 +1,605 @@
-// Scanner page logic
-(() => {
-  async function init() {
-    // Auth guard – if not teacher, will redirect
-    const authorized = await window.qrAttendanceAuth.requireTeacher();
-    if (!authorized) return;
+import { getFirestore, doc, getDoc, setDoc, collection, query, where, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js";
+import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
+import { app } from "./firebase-config.js";
+import { initAuthGuard, getCurrentStaff, hidePageContent, showPageContent, signOutAndRedirect } from "./auth-guard.js";
+import { initStaffNav } from "./nav.js";
+import { requestEmail } from "./email.js";
+import "./site-config.js";
 
-    // Get teacher name for header
-    const { data: sessionData } = await window.qrAttendanceAuth.supabaseClient.auth.getSession();
-    const { data: teacher } = await window.qrAttendanceAuth.supabaseClient
-      .from('teachers')
-      .select('name')
-      .eq('id', sessionData.session.user.id)
-      .single();
+const db = getFirestore(app);
+const auth = getAuth(app);
 
-    document.getElementById('teacher-name-sub').textContent =
-      teacher && teacher.name ? teacher.name : 'Teacher';
+// DOM elements
+const staffNameEl = document.querySelector("#staff-name");
+const mainContent = document.querySelector("#main-content");
+const pageFooter = document.querySelector("#page-footer");
+const scanMessage = document.querySelector("#scan-message");
+const resultCard = document.querySelector("#result-card");
+const resultChip = document.querySelector("#result-chip");
+const resultText = document.querySelector("#result-text");
+const resultTime = document.querySelector("#result-time");
+const resultLabel = document.querySelector("#result-label");
+const emailStatus = document.querySelector("#email-status");
+const timeInButton = document.querySelector("#time-in-button");
+const timeOutButton = document.querySelector("#time-out-button");
+const cameraSwitchButton = document.querySelector("#camera-switch-button");
+const logsBody = document.querySelector("#logs-body");
+const logsEmptyState = document.querySelector("#logs-empty-state");
+const logsTable = document.querySelector("#logs-table");
+const logsMessage = document.querySelector("#logs-message");
+const signoutButton = document.querySelector("#signout-button");
 
-    // Initialize mode
-    let mode = 'time_in'; // default
-    const modeInBtn = document.getElementById('mode-in');
-    const modeOutBtn = document.getElementById('mode-out');
+// State
+let currentMode = "time_in";
+let html5QrCode = null;
+let currentCameraId = null;
+let cameras = [];
+let lastScannedCode = null;
+let lastScanTime = 0;
+let logsUnsubscribe = null;
+let lastAttendanceId = null;
+let emailStatusUnsubscribe = null;
+let currentStaffUid = null;
+let lastGuardianName = "";
 
-    function updateModeUI() {
-      const inActive = mode === 'time_in';
-      modeInBtn.setAttribute('aria-pressed', inActive);
-      modeOutBtn.setAttribute('aria-pressed', !inActive);
-      modeInBtn.classList.toggle('btn-primary', inActive);
-      modeInBtn.classList.toggle('btn-secondary', !inActive);
-      modeOutBtn.classList.toggle('btn-primary', !inActive);
-      modeOutBtn.classList.toggle('btn-secondary', inActive);
-    }
+// Hide page content until auth resolves
+hidePageContent();
 
-    modeInBtn.addEventListener('click', () => {
-      mode = 'time_in';
-      updateModeUI();
+// Initialize auth guard
+initAuthGuard().then((staff) => {
+  if (!staff) {
+    window.location.href = "login.html";
+    return;
+  }
+
+  currentStaffUid = staff.uid;
+  if (staffNameEl) {
+    staffNameEl.textContent = staff.name || "Teacher";
+  }
+
+  showPageContent();
+  mainContent.hidden = false;
+  pageFooter.hidden = false;
+
+  if (signoutButton) {
+    signoutButton.addEventListener("click", () => {
+      if (html5QrCode) {
+        html5QrCode.stop().catch(() => {});
+        html5QrCode = null;
+      }
+      if (logsUnsubscribe) {
+        logsUnsubscribe();
+        logsUnsubscribe = null;
+      }
+      if (emailStatusUnsubscribe) {
+        emailStatusUnsubscribe();
+        emailStatusUnsubscribe = null;
+      }
+      signOutAndRedirect();
     });
-    modeOutBtn.addEventListener('click', () => {
-      mode = 'time_out';
-      updateModeUI();
+  }
+
+  initializeScanner();
+  startLogsListener();
+});
+
+// Mode toggle handlers
+timeInButton.addEventListener("click", () => setMode("time_in"));
+timeOutButton.addEventListener("click", () => setMode("time_out"));
+
+function setMode(mode) {
+  currentMode = mode;
+  const isTimeIn = mode === "time_in";
+  timeInButton.setAttribute("aria-pressed", String(isTimeIn));
+  timeOutButton.setAttribute("aria-pressed", String(!isTimeIn));
+  clearScanMessage();
+  hideResultCard();
+}
+
+// Camera switch handler
+cameraSwitchButton.addEventListener("click", async () => {
+  if (cameras.length <= 1) return;
+  const currentIndex = cameras.findIndex((c) => c.id === currentCameraId);
+  const nextIndex = (currentIndex + 1) % cameras.length;
+  await switchCamera(cameras[nextIndex].id);
+});
+
+async function initializeScanner() {
+  try {
+    html5QrCode = new Html5Qrcode("camera-view");
+    cameras = await Html5Qrcode.getCameras();
+  } catch (error) {
+    console.error("Failed to get cameras:", error);
+    showScanMessage("No camera found. Please connect a camera and reload.", true);
+    cameraSwitchButton.hidden = true;
+    return;
+  }
+
+  if (cameras.length === 0) {
+    showScanMessage("No camera found. Please connect a camera and reload.", true);
+    cameraSwitchButton.hidden = true;
+    return;
+  }
+
+  // Prefer rear camera (environment) first
+  const rearCamera = cameras.find((c) => (
+    c.label.toLowerCase().includes("back") ||
+    c.label.toLowerCase().includes("rear") ||
+    c.label.toLowerCase().includes("environment")
+  ));
+  currentCameraId = rearCamera ? rearCamera.id : cameras[0].id;
+  cameraSwitchButton.hidden = cameras.length <= 1;
+  updateCameraSwitchButtonLabel();
+
+  await startScanning(currentCameraId);
+}
+
+async function startScanning(cameraId) {
+  if (!html5QrCode) return;
+
+  try {
+    await html5QrCode.start(
+      cameraId,
+      {
+        fps: 10,
+        qrbox: { width: 250, height: 250 },
+        aspectRatio: 1.0,
+        disableFlip: false
+      },
+      onScanSuccess,
+      onScanFailure
+    );
+  } catch (error) {
+    console.error("Failed to start scanner:", error);
+    if (error.name === "NotAllowedError" || error.message.includes("permission")) {
+      showScanMessage("Camera permission denied. Please allow camera access in your browser settings and reload.", true);
+    } else if (error.name === "NotFoundError" || error.message.includes("not found")) {
+      showScanMessage("No camera found. Please connect a camera and reload.", true);
+    } else {
+      showScanMessage("Unable to start camera. Please try again or reload the page.", true);
+    }
+  }
+}
+
+async function switchCamera(cameraId) {
+  if (!html5QrCode) return;
+  try {
+    await html5QrCode.stop();
+    currentCameraId = cameraId;
+    updateCameraSwitchButtonLabel();
+    await startScanning(cameraId);
+  } catch (error) {
+    console.error("Failed to switch camera:", error);
+    showScanMessage("Failed to switch camera.", true);
+  }
+}
+
+function updateCameraSwitchButtonLabel() {
+  const camera = cameras.find((c) => c.id === currentCameraId);
+  const isFront = camera && (camera.label.toLowerCase().includes("front") || camera.label.toLowerCase().includes("user"));
+  cameraSwitchButton.textContent = isFront ? "Switch to rear camera" : "Switch to front camera";
+}
+
+function onScanSuccess(decodedText) {
+  const now = Date.now();
+  if (lastScannedCode === decodedText && now - lastScanTime < 3000) {
+    return;
+  }
+  lastScannedCode = decodedText;
+  lastScanTime = now;
+  handleScanResult(decodedText);
+}
+
+function onScanFailure() {
+  // Ignore scan failures (no QR code in frame)
+}
+
+function isValidUUID(text) {
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(text);
+}
+
+async function handleScanResult(studentId) {
+  clearScanMessage();
+  hideResultCard();
+
+  if (!isValidUUID(studentId)) {
+    showRejectionCard("Not a valid student QR", "red");
+    playFeedback("error");
+    return;
+  }
+
+  const staff = getCurrentStaff();
+  if (!staff) {
+    showRejectionCard("Not authenticated. Please sign in again.", "red");
+    playFeedback("error");
+    return;
+  }
+
+  try {
+    // Get student document
+    const studentRef = doc(db, "students", studentId);
+    const studentSnap = await getDoc(studentRef);
+
+    if (!studentSnap.exists()) {
+      showRejectionCard("Student not found", "red");
+      playFeedback("error");
+      return;
+    }
+
+    const studentData = studentSnap.data();
+    if (studentData.approved !== true) {
+      showRejectionCard("Student registration not approved", "red");
+      playFeedback("error");
+      return;
+    }
+
+    lastGuardianName = studentData.guardianName || "";
+
+    // Compute logDay in browser (Asia/Manila)
+    const logDay = Math.floor((Date.now() + 28800000) / 86400000);
+    const type = currentMode;
+    const attendanceId = `${studentId}_${type}_${logDay}`;
+
+    // Check if attendance document already exists
+    const attendanceRef = doc(db, "attendance", attendanceId);
+    const attendanceSnap = await getDoc(attendanceRef);
+
+    if (attendanceSnap.exists()) {
+      const existingData = attendanceSnap.data();
+      const timeStr = formatTimeFromTimestamp(existingData.createdAt);
+      const label = type === "time_in" ? "timed in" : "timed out";
+      showRejectionCard(`Already ${label} today at ${timeStr}`, "amber");
+      playFeedback("warning");
+      return;
+    }
+
+    // For time_out, check that time_in exists
+    if (type === "time_out") {
+      const timeInId = `${studentId}_time_in_${logDay}`;
+      const timeInRef = doc(db, "attendance", timeInId);
+      const timeInSnap = await getDoc(timeInRef);
+      if (!timeInSnap.exists()) {
+        showRejectionCard("No time in recorded today", "amber");
+        playFeedback("warning");
+        return;
+      }
+    }
+
+    // Write attendance document
+    await setDoc(attendanceRef, {
+      studentId,
+      type,
+      logDay,
+      studentName: studentData.studentName,
+      guardianEmail: studentData.guardianEmail,
+      scannedBy: staff.uid,
+      createdAt: serverTimestamp()
     });
-    updateModeUI();
 
-    // ---- NEW: Load today's logs from DB on page start ----
-    async function loadTodaysLogs() {
-      const { data: logs, error } = await window.qrAttendanceAuth.supabaseClient
-        .from('attendance_logs')
-        .select(`
-          id,
-          student_id,
-          type,
-          created_at,
-          students!inner(student_name, guardian_name)
-        `)
-        .eq('scanned_by', sessionData.session.user.id)
-        .order('created_at', { ascending: false });
-
-      const listDiv = document.getElementById('scan-list');
-      if (error) {
-        console.error('Error loading logs:', error);
-        listDiv.innerHTML = '<p class="hint error">Failed to load logs.</p>';
-        return;
-      }
-
-      if (!logs || logs.length === 0) {
-        listDiv.innerHTML = '<p class="hint">No scans yet.</p>';
-        return;
-      }
-
-      listDiv.innerHTML = ''; // clear loading hint
-
-      logs.forEach(log => {
-        const student = log.students;
-        const timeObj = new Date(log.created_at);
-        // Format in 12‑hour Asia/Manila
-        const options = { hour: '2-digit', minute: '2-digit', hour12: true };
-        const timeStr = timeObj.toLocaleTimeString('en-PH', options);
-        const dateStr = timeObj.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
-
-        const item = document.createElement('div');
-        item.className = 'scan-item';
-        item.innerHTML = `
-          <strong>${escapeHtml(student.student_name)}</strong> — ${log.type === 'time_in' ? 'In' : 'Out'} at ${timeStr} (${dateStr})
-        `;
-        listDiv.appendChild(item);
-      });
+    // Read back to get server timestamp for display
+    const newSnap = await getDoc(attendanceRef);
+    if (!newSnap.exists()) {
+      showScanMessage("Write succeeded but could not read back. Please check logs.", true);
+      playFeedback("error");
+      return;
     }
 
-    // ---- QR scanner setup ----
-    const html5QrCode = new Html5Qrcode('qr-reader');
-    let isScanning = false;
-    let useFront = false;
-    const recentScans = new Map(); // debounce: code -> timestamp
+    const newData = newSnap.data();
+    const timeStr = formatTimeFromTimestamp(newData.createdAt);
+    const typeLabel = type === "time_in" ? "Time In" : "Time Out";
+    showResultCard(studentData.studentName, typeLabel, timeStr, lastGuardianName);
+    playFeedback("success");
 
-    const scanConfig = { fps: 10, qrbox: 250 };
+    // Start email notification flow (non-blocking)
+    lastAttendanceId = attendanceId;
+    requestEmail(attendanceId);
+    startEmailStatusListener(attendanceId, lastGuardianName);
 
-    async function onScanSuccess(decodedText) {
-      // Debounce: ignore the same code within 3 seconds
-      const now = Date.now();
-      const lastSeen = recentScans.get(decodedText);
-      if (lastSeen && now - lastSeen < 3000) {
-        return;
-      }
-      recentScans.set(decodedText, now);
-      // Prune old entries
-      if (recentScans.size > 50) {
-        for (const [key, ts] of recentScans.entries()) {
-          if (now - ts > 60000) recentScans.delete(key);
-        }
-      }
-
-      // Validate UUID format
-      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(decodedText)) {
-        showTempMessage('Not a valid student QR', 'error');
-        return;
-      }
-
-      // Look up student
-      const { data: student, error: lookupErr } = await window.qrAttendanceAuth.supabaseClient
-        .from('students')
-        .select('id, student_name, guardian_name, approved')
-        .eq('id', decodedText)
-        .single();
-
-      if (lookupErr) {
-        console.error('Lookup error:', lookupErr);
-        showTempMessage('Error looking up student', 'error');
-        return;
-      }
-
-      if (!student) {
-        showTempMessage('Student not found', 'error');
-        return;
-      }
-
-      if (!student.approved) {
-        showTempMessage('Student is not approved yet', 'error');
-        return;
-      }
-
-      // Try to insert into attendance_logs with duplicate guard
-      const { error: insertErr, data: newLog } = await window.qrAttendanceAuth.supabaseClient
-        .from('attendance_logs')
-        .insert({
-          student_id: decodedText,
-          type: mode,
-          scanned_by: sessionData.session.user.id,
-        })
-        .select()
-        .single();
-
-      if (insertErr) {
-        // Unique constraint violation (23505): same student+type+log_date exists
-        if (insertErr.code === '23505') {
-          // Look up the existing log for today to show the current time
-          const todayStart = new Date();
-          todayStart.setHours(0, 0, 0, 0);
-          const todayEnd = new Date(todayStart);
-          todayEnd.setHours(23, 59, 59, 999);
-
-          const { data: existing, error: fetchErr } = await window.qrAttendanceAuth.supabaseClient
-            .from('attendance_logs')
-            .select('id, type, created_at')
-            .eq('student_id', decodedText)
-            .eq('type', mode)
-            .gte('created_at', todayStart.toISOString())
-            .lte('created_at', todayEnd.toISOString())
-            .maybeSingle();
-
-          if (fetchErr || !existing) {
-            // Something else went wrong; inform the teacher
-            console.error('Error fetching existing log:', fetchErr);
-            showTempMessage('Duplicate error – please try again', 'error');
-            return;
-          }
-
-          const existingTime = new Date(existing.created_at);
-          const timeStr = existingTime.toLocaleTimeString('en-PH', {
-            hour: '2-digit', minute: '2-digit', hour12: true,
-          });
-          const modeLabel = mode === 'time_in' ? 'Time In' : 'Time Out';
-
-          showTempMessage(
-            `Already ${modeLabel.toLowerCase()}d today at ${timeStr}`,
-            'warning'
-          );
-          // Play beep for rejection
-          playAudio('rejection');
-          return;
-        }
-
-        // Other database error
-        console.error('Insert error:', insertErr);
-        showTempMessage('Database error – scan not recorded', 'error');
-        playAudio('error');
-        return;
-      }
-
-      // SUCCESS: insert returned a row
-      const timeObj = new Date(newLog.created_at);
-      const timeStr = timeObj.toLocaleTimeString('en-PH', {
-        hour: '2-digit', minute: '2-digit', hour12: true,
-      });
-      const modeLabel = mode === 'time_in' ? 'Time In' : 'Time Out';
-
-      // Show green result card with student name ONLY (no phone)
-      const resultDiv = document.getElementById('scan-result-content');
-      resultDiv.innerHTML = `
-        <p><strong>${escapeHtml(student.student_name)}</strong>, ${modeLabel} recorded, ${timeStr}</p>
-      `;
-      document.getElementById('scan-result').hidden = false;
-
-      // Append to today's session list
-      await appendScanToList(student.student_name, mode, timeStr);
-
-      // Play success beep
-      playAudio('success');
+  } catch (error) {
+    console.error("Scan handling failed:", error);
+    if (error.code === "permission-denied" || (error.message && error.message.includes("permission"))) {
+      showRejectionCard("Permission denied. The security rules rejected this scan.", "red");
+    } else {
+      showRejectionCard("Scan failed. Please try again.", "red");
     }
+    playFeedback("error");
+  }
+}
 
-    function onScanError(error) {
-      // Transient errors are normal while scanning; only update status
-      document.getElementById('camera-status').textContent =
-        'Scanning… (point camera at QR code)';
+function formatTimeFromTimestamp(timestamp) {
+  if (!timestamp) return "—";
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  return date.toLocaleString("en-PH", {
+    timeZone: "Asia/Manila",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  });
+}
+
+function showScanMessage(message, isError) {
+  scanMessage.textContent = message;
+  scanMessage.style.color = isError ? "var(--ds-danger)" : "var(--ds-amber)";
+}
+
+function clearScanMessage() {
+  scanMessage.textContent = "";
+  scanMessage.style.color = "";
+}
+
+function showResultCard(studentName, typeLabel, timeStr, guardianName) {
+  resultCard.className = "scanner-result-card";
+  resultLabel.textContent = "LAST SCAN";
+  resultChip.textContent = typeLabel.toUpperCase();
+  resultChip.className = typeLabel === "Time In" ? "chip chip--present" : "chip chip--late";
+  resultText.textContent = studentName;
+  resultTime.textContent = timeStr;
+  resultCard.hidden = false;
+  emailStatus.hidden = false;
+  emailStatus.textContent = "Sending email…";
+  emailStatus.style.color = "var(--ds-text-soft)";
+}
+
+function showRejectionCard(message, variant) {
+  resultCard.className = "scanner-result-card " + (variant === "amber" ? "result-card--rejection-amber" : "result-card--rejection-red");
+  resultLabel.textContent = "SCAN REJECTED";
+  resultChip.textContent = variant === "amber" ? "WARNING" : "ERROR";
+  resultChip.className = variant === "amber" ? "chip chip--late" : "chip chip--absent";
+  resultText.textContent = message;
+  resultTime.textContent = "";
+  resultCard.hidden = false;
+  emailStatus.hidden = true;
+  emailStatus.textContent = "";
+}
+
+function hideResultCard() {
+  resultCard.hidden = true;
+  emailStatus.hidden = true;
+  emailStatus.textContent = "";
+}
+
+function playFeedback(type) {
+  if ("vibrate" in navigator) {
+    if (type === "success") {
+      navigator.vibrate([100, 50, 100]);
+    } else if (type === "warning") {
+      navigator.vibrate([200, 100, 200]);
+    } else {
+      navigator.vibrate(300);
     }
+  }
 
-    // ---- Append scan to the in‑memory list (kept in sync with DB) ----
-    async function appendScanToList(name, mode, timeStr) {
-      const listDiv = document.getElementById('scan-list');
-      const item = document.createElement('div');
-      item.className = 'scan-item';
-      item.innerHTML = `<strong>${escapeHtml(name)}</strong> — ${mode === 'time_in' ? 'In' : 'Out'} at ${timeStr}`;
-      listDiv.prepend(item);
-      // Keep list to max 10
-      if (listDiv.children.length > 10) {
-        listDiv.removeChild(listDiv.lastChild);
-      }
-      // Remove empty‑state hint if it was there
-      if (listDiv.classList.contains('empty-state')) {
-        listDiv.classList.remove('empty-state');
-        listDiv.innerHTML = '';
-      }
-    }
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
 
-    // ---- Temp message helper ----
-    function showTempMessage(msg, type = 'info') {
-      const status = document.getElementById('camera-status');
-      const prev = status.textContent;
-      const prevClass = status.className;
-      status.textContent = msg;
-      status.className = `hint ${type}`;
+    if (type === "success") {
+      oscillator.frequency.value = 800;
+      oscillator.type = "sine";
+      gainNode.gain.value = 0.1;
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.15);
       setTimeout(() => {
-        status.textContent = prev;
-        status.className = prevClass;
-      }, 2500);
+        const osc2 = audioCtx.createOscillator();
+        const g2 = audioCtx.createGain();
+        osc2.connect(g2);
+        g2.connect(audioCtx.destination);
+        osc2.frequency.value = 1000;
+        g2.gain.value = 0.1;
+        osc2.start();
+        osc2.stop(audioCtx.currentTime + 0.15);
+      }, 150);
+    } else if (type === "warning") {
+      oscillator.frequency.value = 400;
+      oscillator.type = "triangle";
+      gainNode.gain.value = 0.1;
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.3);
+    } else {
+      oscillator.frequency.value = 200;
+      oscillator.type = "sawtooth";
+      gainNode.gain.value = 0.1;
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.4);
     }
+  } catch {
+    // Audio unavailable or blocked
+  }
+}
 
-    // ---- Audio helpers (Web Audio API + vibrate) ----
-    function playAudio(kind) {
-      // Vibrate
-      if (navigator.vibrate) {
-        const patterns = {
-          success: [100, 50, 100],
-          rejection: [200, 100, 200],
-          error: [300, 200, 300],
-        };
-        const pattern = patterns[kind] || [200];
-        navigator.vibrate(pattern);
-      }
-      // Optional simple beep via Web Audio (cross‑domain restrictions may limit this)
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = ctx.createOscillator();
-        const gain = ctx.createGain();
-        oscillator.connect(gain);
-        gain.connect(ctx.destination);
-        oscillator.frequency.value = kind === 'success' ? 880 : 200;
-        gain.gain.value = 0.3;
-        oscillator.start();
-        setTimeout(() => oscillator.stop(), 300);
-      } catch (e) {
-        // Ignore – beep is optional
-      }
-    }
-
-    // ---- Start camera ----
-    async function startScanning() {
-      try {
-        await html5QrCode.start(
-          { facingMode: useFront ? 'user' : 'environment' },
-          scanConfig,
-          onScanSuccess,
-          onScanError
-        );
-        isScanning = true;
-        document.getElementById('camera-status').textContent =
-          'Scanning… (point camera at QR code)';
-        document.getElementById('camera-status').className = 'hint';
-      } catch (err) {
-        console.error('Unable to start scanning:', err);
-        let helpText = 'Unable to access camera. ';
-        if (err && /permission/i.test(err.message)) {
-          helpText += 'Please allow camera permission for this site.';
-        } else {
-          helpText += 'Make sure a camera is connected and you are on HTTPS (or localhost).';
-        }
-        document.getElementById('camera-status').textContent = helpText;
-        document.getElementById('camera-status').className = 'hint error';
-      }
-    }
-
-    // Camera switch (front/rear)
-    document.getElementById('toggle-camera-btn').addEventListener('click', async () => {
-      if (!isScanning) return;
-      try {
-        await html5QrCode.stop();
-        isScanning = false;
-        useFront = !useFront;
-        await html5QrCode.start(
-          { facingMode: useFront ? 'user' : 'environment' },
-          scanConfig,
-          onScanSuccess,
-          onScanError
-        );
-        isScanning = true;
-        document.getElementById('camera-status').textContent =
-          `Scanning… (${useFront ? 'front' : 'rear'} camera)`;
-      } catch (err) {
-        console.error('Switch camera error:', err);
-        document.getElementById('camera-status').textContent =
-          'Unable to switch camera.';
-        document.getElementById('camera-status').className = 'hint error';
-      }
-    });
-
-    // Sign out via the shared nav button
-    document.getElementById('nav-sign-out').addEventListener('click', () => {
-      window.qrAttendanceAuth.signOut();
-    });
-
-    // ---- Mode buttons already set up earlier ----
-    // (updateModeUI was called above)
-
-    await startScanning();
-
-    // Load today's logs from DB
-    await loadTodaysLogs();
+/**
+ * Listen to notifications/{attendanceId} for email status updates.
+ */
+function startEmailStatusListener(attendanceId, guardianName) {
+  if (emailStatusUnsubscribe) {
+    emailStatusUnsubscribe();
+    emailStatusUnsubscribe = null;
   }
 
-  // Initialize when ready
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    init();
+  const notificationRef = doc(db, "notifications", attendanceId);
+  let settled = false;
+  const timeoutMs = 30000;
+  const startTime = Date.now();
+
+  const cleanup = () => {
+    if (emailStatusUnsubscribe) {
+      emailStatusUnsubscribe();
+      emailStatusUnsubscribe = null;
+    }
+  };
+
+  emailStatusUnsubscribe = onSnapshot(notificationRef, (snap) => {
+    if (settled) return;
+
+    if (!snap.exists()) {
+      if (Date.now() - startTime > timeoutMs) {
+        showEmailStatus("Email status unknown", "amber");
+        settled = true;
+        cleanup();
+      }
+      return;
+    }
+
+    const data = snap.data();
+    const status = data.status;
+
+    if (status === "sending") {
+      showEmailStatus("Sending email…", "soft");
+    } else if (status === "sent") {
+      const gText = guardianName ? `Email sent to ${guardianName}` : "Email sent";
+      showEmailStatus(`✓ ${gText}`, "green");
+      settled = true;
+      cleanup();
+    } else if (status === "skipped") {
+      showEmailStatus("Email skipped (test mode)", "green");
+      settled = true;
+      cleanup();
+    } else if (status === "failed") {
+      showEmailStatus("Email failed", "amber");
+      settled = true;
+      cleanup();
+    }
+  }, (error) => {
+    console.error("Email status listener error:", error);
+    if (!settled) {
+      showEmailStatus("Email status unavailable", "amber");
+      settled = true;
+      cleanup();
+    }
+  });
+
+  setTimeout(() => {
+    if (!settled) {
+      showEmailStatus("Email status timeout", "amber");
+      settled = true;
+      cleanup();
+    }
+  }, timeoutMs);
+}
+
+function showEmailStatus(message, variant) {
+  emailStatus.textContent = message;
+  emailStatus.hidden = false;
+  if (variant === "green") {
+    emailStatus.style.color = "var(--ds-primary)";
+  } else if (variant === "amber") {
+    emailStatus.style.color = "#8A4A0B";
   } else {
-    document.addEventListener('DOMContentLoaded', init);
+    emailStatus.style.color = "var(--ds-text-soft)";
   }
-})();
+}
 
-// Helper: escape HTML
-function escapeHtml(str) {
-  return str.replace(/[&<>"']/g, m => ({
-    '&': '&', '<': '<', '>': '>',
-    '"': '"', "'": '''
-  })[m]);
+function startLogsListener() {
+  const logDay = Math.floor((Date.now() + 28800000) / 86400000);
+  const attendanceRef = collection(db, "attendance");
+  const q = query(attendanceRef, where("logDay", "==", logDay));
+
+  logsUnsubscribe = onSnapshot(q, async (snapshot) => {
+    logsBody.replaceChildren();
+    const logs = [];
+
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      logs.push({
+        id: docSnap.id,
+        ...data
+      });
+    });
+
+    // Sort by createdAt descending (newest first)
+    logs.sort((a, b) => {
+      const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt?.seconds ? a.createdAt.seconds * 1000 : 0);
+      const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt?.seconds ? b.createdAt.seconds * 1000 : 0);
+      return timeB - timeA;
+    });
+
+    if (logs.length === 0) {
+      logsEmptyState.hidden = false;
+      logsTable.hidden = true;
+      return;
+    }
+
+    logsEmptyState.hidden = true;
+    logsTable.hidden = false;
+
+    for (const log of logs) {
+      const row = await createLogRowWithEmailStatus(log);
+      logsBody.appendChild(row);
+    }
+  }, (error) => {
+    console.error("Logs listener error:", error);
+    logsMessage.textContent = "Failed to load today's logs.";
+    logsMessage.style.color = "var(--ds-danger)";
+    logsEmptyState.hidden = false;
+    logsTable.hidden = true;
+  });
+}
+
+async function createLogRowWithEmailStatus(log) {
+  const row = document.createElement("tr");
+
+  // Student Name on left
+  const nameCell = document.createElement("td");
+  nameCell.className = "earlier-name";
+  nameCell.textContent = log.studentName || "—";
+  row.appendChild(nameCell);
+
+  // Time & Type on right: "7:41 AM - In"
+  const timeCell = document.createElement("td");
+  timeCell.className = "earlier-time";
+  const typeShort = log.type === "time_in" ? "In" : "Out";
+  timeCell.textContent = `${formatTimeFromTimestamp(log.createdAt)} - ${typeShort}`;
+  row.appendChild(timeCell);
+
+  // Email action / status
+  const actionCell = document.createElement("td");
+  actionCell.className = "earlier-action";
+
+  const retryButton = document.createElement("button");
+  retryButton.type = "button";
+  retryButton.className = "btn btn-outline btn-sm";
+  retryButton.textContent = "Retry";
+  retryButton.style.color = "var(--ds-amber)";
+  retryButton.style.borderColor = "var(--ds-amber)";
+  retryButton.hidden = true;
+  retryButton.addEventListener("click", () => {
+    retryButton.disabled = true;
+    retryButton.textContent = "Retrying…";
+    requestEmail(log.id).finally(() => {
+      retryButton.disabled = false;
+      retryButton.textContent = "Retry";
+    });
+  });
+  actionCell.appendChild(retryButton);
+  row.appendChild(actionCell);
+
+  // Listener for notification document
+  const notificationRef = doc(db, "notifications", log.id);
+  onSnapshot(notificationRef, (snap) => {
+    if (!snap.exists()) {
+      retryButton.hidden = false;
+      return;
+    }
+
+    const data = snap.data();
+    const status = data.status;
+    const attempts = data.attempts || 1;
+    const updatedAt = data.updatedAt?.toDate ? data.updatedAt.toDate() : null;
+
+    if (status === "failed") {
+      const isStaleSending = status === "sending" && updatedAt && (Date.now() - updatedAt.getTime()) >= 120000;
+      if (attempts < 3 || isStaleSending) {
+        retryButton.hidden = false;
+      } else {
+        retryButton.hidden = true;
+      }
+    } else {
+      retryButton.hidden = true;
+    }
+  });
+
+  return row;
 }

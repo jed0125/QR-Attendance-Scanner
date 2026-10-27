@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>School Calendar Tests</title>
+    <style>
+      body { font-family: monospace; padding: 20px; max-width: 900px; margin: 0 auto; }
+      .pass { color: #28745e; }
+      .fail { color: #b42318; }
+      .test { margin: 8px 0; padding: 8px; border-left: 4px solid #cbd8d2; }
+      .test.pass { border-color: #28745e; background: #f5faf7; }
+      .test.fail { border-color: #b42318; background: #fdeaea; }
+      h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+      .summary { font-weight: bold; margin-top: 1rem; padding: 1rem; background: #f5faf7; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>School Calendar Tests</h1>
+    <div id="results"></div>
+    <div class="summary" id="summary"></div>
+    <script type="module">
+      import * as Cal from "../js/school-calendar.js";
+
+      let passCount = 0;
+      let failCount = 0;
+
+      function assert(condition, message) {
+        const div = document.createElement("div");
+        div.className = "test " + (condition ? "pass" : "fail");
+        div.textContent = (condition ? "✓ PASS: " : "✗ FAIL: ") + message;
+        document.getElementById("results").appendChild(div);
+        if (condition) passCount++; else failCount++;
+        return condition;
+      }
+
+      function assertEqual(actual, expected, message) {
+        const ok = actual === expected;
+        const msg = ok ? message : message + ` (expected ${expected}, got ${actual})`;
+        return assert(ok, msg);
+      }
+
+      // Test settings
+      const settings = {
+        schoolYearStart: "2026-06-01",
+        schoolYearEnd: "2027-03-31",
+        schoolDays: [1, 2, 3, 4, 5], // Mon-Fri
+        lateAfter: "08:00",
+        absentAfter: "10:00",
+        holidays: ["2026-06-12", "2026-08-21"] // Independence Day, Ninoy Aquino Day
+      };
+
+      // Helper: create a Date at a specific Manila time, return UTC millis
+      function manilaTime(year, month, day, hour, minute) {
+        // Create date in Manila timezone
+        const date = new Date(Date.UTC(year, month, day, hour - 8, minute, 0, 0));
+        return date.getTime();
+      }
+
+      // FIXED CLOCK: 2026-06-15 09:00 Manila time (Monday, school day, before absentAfter 10:00)
+      // 2026-06-15T09:00:00+08:00 = 2026-06-15T01:00:00Z
+      const FIXED_NOW_MILLIS = new Date("2026-06-15T01:00:00Z").getTime();
+      const FIXED_TODAY_LOG_DAY = Math.floor((FIXED_NOW_MILLIS + Cal.MANILA_OFFSET_MS) / Cal.DAY_MS);
+
+      // 2026-06-15 is a Monday (logDay calculation)
+      const testDate = new Date("2026-06-15T00:00:00+08:00");
+      const logDayMon = Math.floor((testDate.getTime() + 8*3600*1000) / (24*3600*1000));
+
+      // 2026-06-13 is a Saturday
+      const satDate = new Date("2026-06-13T00:00:00+08:00");
+      const logDaySat = Math.floor((satDate.getTime() + 8*3600*1000) / (24*3600*1000));
+
+      // 2026-06-12 is a Friday (holiday)
+      const friDate = new Date("2026-06-12T00:00:00+08:00");
+      const logDayFri = Math.floor((friDate.getTime() + 8*3600*1000) / (24*3600*1000));
+
+      // 2026-05-31 (before school year start, Sunday)
+      const beforeDate = new Date("2026-05-31T00:00:00+08:00");
+      const logDayBefore = Math.floor((beforeDate.getTime() + 8*3600*1000) / (24*3600*1000));
+
+      // 2026-06-14 is a Sunday
+      const sunDate = new Date("2026-06-14T00:00:00+08:00");
+      const logDaySun = Math.floor((sunDate.getTime() + 8*3600*1000) / (24*3600*1000));
+
+      console.log("Test logDays:", { logDayMon, logDaySat, logDayFri, logDayBefore, logDaySun, FIXED_TODAY_LOG_DAY });
+
+      // Test 1: Saturday is no_class
+      let result = Cal.getDayStatus({
+        logDay: logDaySat,
+        settings,
+        approvedLogDay: logDayBefore - 10,
+        timeInMillis: null,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.status, "no_class", "Saturday is no_class");
+
+      // Test 2: Holiday (2026-06-12) is no_class
+      result = Cal.getDayStatus({
+        logDay: logDayFri,
+        settings,
+        approvedLogDay: logDayBefore - 10,
+        timeInMillis: null,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.status, "no_class", "Holiday (2026-06-12) is no_class");
+
+      // Test 3: Day before student approval is no_class
+      const approvedLogDay = logDayMon; // approved on Monday
+      result = Cal.getDayStatus({
+        logDay: logDayMon - 1, // Sunday before approval
+        settings,
+        approvedLogDay,
+        timeInMillis: null,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.status, "no_class", "Day before approval is no_class");
+
+      // Test 4: Past school day with no time-in is absent
+      result = Cal.getDayStatus({
+        logDay: logDayMon - 7, // Previous Monday (past)
+        settings,
+        approvedLogDay: logDayBefore - 10,
+        timeInMillis: null,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.status, "absent", "Past school day with no time-in is absent");
+
+      // Test 5: Time-in at 7:55 with lateAfter 08:00 is present
+      const timeIn755 = manilaTime(2026, 5, 15, 7, 55); // June 15, 2026 07:55 Manila
+      result = Cal.getDayStatus({
+        logDay: logDayMon,
+        settings,
+        approvedLogDay: logDayBefore - 10,
+        timeInMillis: timeIn755,
+        timeOutMillis: null,
+        nowMillis: timeIn755 + 3600000 // 1 hour later
+      });
+      assertEqual(result.status, "present", "Time-in at 7:55 (before 08:00) is present");
+
+      // Test 6: Time-in at 8:01 with lateAfter 08:00 is late
+      const timeIn801 = manilaTime(2026, 5, 15, 8, 1);
+      result = Cal.getDayStatus({
+        logDay: logDayMon,
+        settings,
+        approvedLogDay: logDayBefore - 10,
+        timeInMillis: timeIn801,
+        timeOutMillis: null,
+        nowMillis: timeIn801 + 3600000
+      });
+      assertEqual(result.status, "late", "Time-in at 8:01 (after 08:00) is late");
+
+      // Test 7: Today (fixed clock) before absentAfter with no time-in is not_yet_in
+      // FIXED_TODAY_LOG_DAY = logDayMon (2026-06-15 Monday)
+      result = Cal.getDayStatus({
+        logDay: FIXED_TODAY_LOG_DAY,
+        settings,
+        approvedLogDay: FIXED_TODAY_LOG_DAY - 10,
+        timeInMillis: null,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.status, "not_yet_in", "Today (school day, before absentAfter) with no time-in is not_yet_in");
+      assertEqual(result.isToday, true, "Today test: isToday should be true");
+      assertEqual(result.isPast, false, "Today test: isPast should be false");
+
+      // Test 8: Today after absentAfter with no time-in is absent
+      // Use a fixed nowMillis that's after 10:00 Manila on the same day
+      const FIXED_NOW_MILLIS_AFTER_ABSENT = new Date("2026-06-15T03:00:00Z").getTime(); // 11:00 Manila
+      result = Cal.getDayStatus({
+        logDay: FIXED_TODAY_LOG_DAY,
+        settings,
+        approvedLogDay: FIXED_TODAY_LOG_DAY - 10,
+        timeInMillis: null,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS_AFTER_ABSENT
+      });
+      assertEqual(result.status, "absent", "Today (school day, after absentAfter) with no time-in is absent");
+
+      // Test 9: Past day with time-in and no time-out has missingTimeOut
+      const pastLogDay = logDayMon - 7;
+      const pastTimeIn = manilaTime(2026, 5, 8, 7, 30);
+      result = Cal.getDayStatus({
+        logDay: pastLogDay,
+        settings,
+        approvedLogDay: logDayBefore - 10,
+        timeInMillis: pastTimeIn,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.missingTimeOut, true, "Past day with time-in and no time-out has missingTimeOut=true");
+      assertEqual(result.status, "present", "Past day with time-in at 7:30 is present");
+
+      // Test 10: Past day with time-in at 8:30 (late) and no time-out
+      const pastTimeInLate = manilaTime(2026, 5, 8, 8, 30);
+      result = Cal.getDayStatus({
+        logDay: pastLogDay,
+        settings,
+        approvedLogDay: logDayBefore - 10,
+        timeInMillis: pastTimeInLate,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.missingTimeOut, true, "Past late day with no time-out has missingTimeOut=true");
+      assertEqual(result.status, "late", "Past day with time-in at 8:30 is late");
+
+      // Test 11: Past day with time-in and time-out has no missingTimeOut
+      const pastTimeOut = manilaTime(2026, 5, 8, 15, 0);
+      result = Cal.getDayStatus({
+        logDay: pastLogDay,
+        settings,
+        approvedLogDay: logDayBefore - 10,
+        timeInMillis: pastTimeIn,
+        timeOutMillis: pastTimeOut,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.missingTimeOut, false, "Past day with time-in and time-out has missingTimeOut=false");
+
+      // Test 12: summarize() counts
+      const days = [
+        { status: "present", missingTimeOut: false },
+        { status: "late", missingTimeOut: false },
+        { status: "absent", missingTimeOut: false },
+        { status: "no_class", missingTimeOut: false },
+        { status: "present", missingTimeOut: true },
+        { status: "late", missingTimeOut: true },
+      ];
+      const summary = Cal.summarize(days);
+      assertEqual(summary.schoolDays, 5, "summarize: schoolDays = 5 (excludes no_class)");
+      assertEqual(summary.present, 4, "summarize: present = 4 (present + late)");
+      assertEqual(summary.late, 2, "summarize: late = 2");
+      assertEqual(summary.absent, 1, "summarize: absent = 1");
+      assertEqual(summary.missingTimeOut, 2, "summarize: missingTimeOut = 2");
+      assertEqual(summary.attendanceRate, 80, "summarize: attendanceRate = 80% (4/5)");
+
+      // Test 13: dayToDateString and weekdayMon1
+      assertEqual(Cal.dayToDateString(logDayMon), "2026-06-15", "dayToDateString for Monday");
+      assertEqual(Cal.weekdayMon1(logDayMon), 1, "weekdayMon1 for Monday = 1");
+      assertEqual(Cal.weekdayMon1(logDaySat), 6, "weekdayMon1 for Saturday = 6");
+      assertEqual(Cal.weekdayMon1(logDayFri), 5, "weekdayMon1 for Friday = 5");
+
+      // Test 14: manilaMinutes
+      const midnight = manilaTime(2026, 5, 15, 0, 0);
+      assertEqual(Cal.manilaMinutes(midnight), 0, "manilaMinutes at midnight = 0");
+      const noon = manilaTime(2026, 5, 15, 12, 0);
+      assertEqual(Cal.manilaMinutes(noon), 720, "manilaMinutes at noon = 720");
+      const time8 = manilaTime(2026, 5, 15, 8, 0);
+      assertEqual(Cal.manilaMinutes(time8), 480, "manilaMinutes at 08:00 = 480");
+
+      // Test 15: parseTimeToMinutes
+      assertEqual(Cal.parseTimeToMinutes("08:00"), 480, "parseTimeToMinutes 08:00 = 480");
+      assertEqual(Cal.parseTimeToMinutes("10:00"), 600, "parseTimeToMinutes 10:00 = 600");
+      assertEqual(Cal.parseTimeToMinutes("07:55"), 475, "parseTimeToMinutes 07:55 = 475");
+
+      // Test 16: isHoliday
+      assertEqual(Cal.isHoliday("2026-06-12", settings.holidays), true, "isHoliday finds 2026-06-12");
+      assertEqual(Cal.isHoliday("2026-06-13", settings.holidays), false, "isHoliday not find 2026-06-13");
+
+      // Test 17: isWithinSchoolYear
+      assertEqual(Cal.isWithinSchoolYear(logDayMon, settings), true, "Monday in school year");
+      assertEqual(Cal.isWithinSchoolYear(logDayBefore, settings), false, "Before school year start = false");
+
+      // Test 18: getMonthLogDayRange
+      const range = Cal.getMonthLogDayRange(2026, 5); // June 2026 (0-indexed)
+      assert(range.firstLogDay <= logDayMon && logDayMon <= range.lastLogDay, "June 2026 range includes June 15");
+
+      // Test 19: Future day is no_class
+      result = Cal.getDayStatus({
+        logDay: FIXED_TODAY_LOG_DAY + 10,
+        settings,
+        approvedLogDay: FIXED_TODAY_LOG_DAY - 10,
+        timeInMillis: null,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.status, "no_class", "Future day is no_class");
+
+      // Test 20: Sunday (not in schoolDays) is no_class
+      result = Cal.getDayStatus({
+        logDay: logDaySun,
+        settings,
+        approvedLogDay: logDayBefore - 10,
+        timeInMillis: null,
+        timeOutMillis: null,
+        nowMillis: FIXED_NOW_MILLIS
+      });
+      assertEqual(result.status, "no_class", "Sunday (not in schoolDays) is no_class");
+
+      // Test 21: logDayFromMillis (Manila calendar day)
+      const manilaMidnight = new Date("2026-06-15T00:00:00+08:00").getTime();
+      assertEqual(Cal.logDayFromMillis(manilaMidnight), logDayMon, "logDayFromMillis: Manila midnight 2026-06-15 = Monday logDay");
+      const justBeforeMidnight = manilaMidnight - 1; // still 2026-06-14 23:59:59 Manila
+      assert(Cal.logDayFromMillis(justBeforeMidnight) === logDayMon - 1, "logDayFromMillis: one second before Manila midnight = previous logDay");
+      const utcNoon = new Date("2026-06-15T12:00:00Z").getTime(); // 2026-06-15 20:00 Manila
+      assertEqual(Cal.logDayFromMillis(utcNoon), logDayMon, "logDayFromMillis: 2026-06-15 20:00 Manila = Monday logDay");
+
+      // Summary
+      const summaryDiv = document.getElementById("summary");
+      summaryDiv.textContent = `Total: ${passCount + failCount} | Pass: ${passCount} | Fail: ${failCount}`;
+      summaryDiv.className = "summary " + (failCount > 0 ? "fail" : "pass");
+    </script>
+  </body>
+</html>

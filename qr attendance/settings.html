@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#12263A">
+    <title>School Settings — School attendance</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2228%22%20height%3D%2228%22%20viewBox%3D%220%200%2028%2028%22%20fill%3D%22none%22%20stroke%3D%22%237FD6BE%22%20stroke-width%3D%222%22%3E%3Crect%20x%3D%223%22%20y%3D%223%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%2217%22%20y%3D%223%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%223%22%20y%3D%2217%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Cpath%20d%3D%22M17%2017h3v3h-3zM22%2022h3M22%2017v2%22%2F%3E%3C%2Fsvg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+    <script type="module" src="js/site-config.js"></script>
+    <script type="module" src="js/settings.js"></script>
+  </head>
+  <body>
+    <header class="site-header" role="banner">
+      <div class="site-header-inner">
+        <div class="site-header-top">
+          <div class="header-brand">
+            <svg class="logo-mark" width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <rect x="3" y="3" width="8" height="8" rx="1"/>
+              <rect x="17" y="3" width="8" height="8" rx="1"/>
+              <rect x="3" y="17" width="8" height="8" rx="1"/>
+              <path d="M17 17h3v3h-3zM22 22h3M22 17v2"/>
+            </svg>
+            <div class="header-copy">
+              <span class="school-name">[SCHOOL NAME]</span>
+              <h1 class="page-title" id="page-title">School Settings</h1>
+            </div>
+          </div>
+          <nav class="nav-bar" aria-label="Staff navigation"></nav>
+        </div>
+        <p class="subtitle">Configure school calendar year, regular school days, schedule times, and holidays.</p>
+      </div>
+    </header>
+
+    <main class="page-shell page-shell--narrow" id="main-content" hidden>
+      <p class="form-message" id="status-message" role="status" aria-live="polite"></p>
+
+      <section class="settings-section" aria-labelledby="settings-title" hidden>
+        <h2 id="settings-title" class="visually-hidden">School Calendar Configuration</h2>
+
+        <form id="settings-form" novalidate style="display: flex; flex-direction: column; gap: 20px;">
+          <!-- School Year Card -->
+          <div class="card">
+            <h3 style="margin-bottom: 14px; font-size: 1.15rem;">School Year</h3>
+            <div class="filter-row">
+              <div class="field" style="flex: 1; min-width: 160px; margin-bottom: 0;">
+                <label for="school-year-start">School year start</label>
+                <input type="date" id="school-year-start" name="schoolYearStart" aria-describedby="year-start-error">
+                <p class="field-error" id="year-start-error"></p>
+              </div>
+              <div class="field" style="flex: 1; min-width: 160px; margin-bottom: 0;">
+                <label for="school-year-end">School year end</label>
+                <input type="date" id="school-year-end" name="schoolYearEnd" aria-describedby="year-end-error">
+                <p class="field-error" id="year-end-error"></p>
+              </div>
+            </div>
+          </div>
+
+          <!-- School Days Card -->
+          <div class="card">
+            <h3 style="margin-bottom: 6px; font-size: 1.15rem;">School Days</h3>
+            <p style="font-size: 0.875rem; color: var(--ds-text-muted); margin-bottom: 12px;">Select days of the week when classes are in session.</p>
+            <div class="day-checkboxes" id="day-checkboxes" role="group" aria-label="Select school days">
+              <!-- Checkboxes inserted by JavaScript -->
+            </div>
+            <p class="form-message" id="days-error" role="status" aria-live="polite"></p>
+          </div>
+
+          <!-- Time Thresholds Card -->
+          <div class="card">
+            <h3 style="margin-bottom: 14px; font-size: 1.15rem;">Time Thresholds</h3>
+            <div class="filter-row">
+              <div class="field" style="flex: 1; min-width: 160px; margin-bottom: 0;">
+                <label for="late-after">Late after</label>
+                <input type="time" id="late-after" name="lateAfter" step="60" aria-describedby="late-error">
+                <p class="field-error" id="late-error"></p>
+              </div>
+              <div class="field" style="flex: 1; min-width: 160px; margin-bottom: 0;">
+                <label for="absent-after">Absent after</label>
+                <input type="time" id="absent-after" name="absentAfter" step="60" aria-describedby="absent-error">
+                <p class="field-error" id="absent-error"></p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Holidays Card -->
+          <div class="card">
+            <h3 style="margin-bottom: 6px; font-size: 1.15rem;">Holidays</h3>
+            <p style="font-size: 0.875rem; color: var(--ds-text-muted);">Non-school dates when attendance is not taken (maximum 100).</p>
+            <div class="holiday-list" id="holiday-list" role="list" aria-label="Holiday dates">
+              <!-- Holiday items inserted here -->
+            </div>
+            <div class="filter-row" style="margin-top: 12px; align-items: flex-end;">
+              <div class="field" style="flex: 1; min-width: 160px; margin-bottom: 0;">
+                <label for="holiday-input">Add holiday</label>
+                <input type="date" id="holiday-input" name="holidayInput" aria-describedby="holiday-error">
+              </div>
+              <button type="button" class="btn btn-secondary" id="add-holiday-button" style="min-width: 100px;">Add</button>
+            </div>
+            <p class="field-error" id="holiday-error"></p>
+            <p class="form-message" id="holiday-count" style="font-size: 0.8125rem; color: var(--ds-text-muted); margin-top: 6px;">0 / 100 holidays</p>
+          </div>
+
+          <p class="form-message" id="form-message" role="status" aria-live="polite"></p>
+          <button class="btn btn-primary" id="save-button" type="submit" style="align-self: flex-start; min-width: 180px;">Save Settings</button>
+        </form>
+      </section>
+
+      <!-- Admin-only message for non-admin staff -->
+      <section class="card" id="admin-only-message" hidden style="text-align: center; padding: 48px 24px;">
+        <h2 style="margin-bottom: 8px;">Admins only</h2>
+        <p style="margin-bottom: 20px;">You must have the <strong>admin</strong> role to manage school settings.</p>
+        <a href="approvals.html" class="btn btn-secondary">Back to Approvals</a>
+      </section>
+    </main>
+
+    <footer class="page-footer" id="page-footer" hidden>
+      Your information is used for school attendance purposes.
+    </footer>
+  </body>
+</html>

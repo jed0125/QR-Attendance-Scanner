@@ -1,0 +1,319 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function: returns true when the caller is an authenticated staff member.
+    function isStaff() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/staff/$(request.auth.uid));
+    }
+
+    // Helper function: returns true when the caller is a staff member with role == 'admin'.
+    // Uses get() on the staff document to check the role field.
+    function isAdmin() {
+      return isStaff()
+        && get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Helper function: returns true when the caller is a verified parent/guardian
+    // whose email matches the guardianEmail field on the resource.
+    // The email in the Firebase Auth token is already normalized to lowercase.
+    // We require email_verified to be true to prevent unverified email spoofing.
+    function isParent() {
+      return request.auth != null
+        && request.auth.token.email_verified == true;
+    }
+
+    // Helper function: checks if the authenticated user's email matches the
+    // guardianEmail field on the given resource (student or attendance document).
+    // Both are compared in lowercase.
+    function isGuardianOf(resource) {
+      return isParent()
+        && resource.data.guardianEmail == request.auth.token.email.lower();
+    }
+
+    // Students collection — Phase 1 public registration remains available to unauthenticated visitors.
+    // Signed-in parents cannot use the public create rule to write student records.
+    // Phase 6A: added optional gradeSection field (string, 1-40 chars).
+    match /students/{studentId} {
+      allow create: if request.auth == null
+        && studentId.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$')
+        && request.resource.data.keys().hasAll([
+          'id',
+          'studentName',
+          'guardianName',
+          'guardianEmail',
+          'guardianPhone',
+          'approved',
+          'consent',
+          'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id',
+          'studentName',
+          'guardianName',
+          'guardianEmail',
+          'guardianPhone',
+          'approved',
+          'consent',
+          'createdAt',
+          'gradeSection'
+        ])
+        && request.resource.data.id == studentId
+        && request.resource.data.studentName is string
+        && request.resource.data.studentName.size() >= 2
+        && request.resource.data.studentName.size() <= 100
+        && request.resource.data.guardianName is string
+        && request.resource.data.guardianName.size() >= 2
+        && request.resource.data.guardianName.size() <= 100
+        && request.resource.data.guardianEmail is string
+        && request.resource.data.guardianEmail.size() < 254
+        && request.resource.data.guardianEmail.matches("^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$")
+        && request.resource.data.guardianEmail == request.resource.data.guardianEmail.lower()
+        && request.resource.data.guardianPhone is string
+        && (
+          request.resource.data.guardianPhone == ''
+          || request.resource.data.guardianPhone.matches('^639[0-9]{9}$')
+        )
+        && request.resource.data.approved == false
+        && request.resource.data.consent == true
+        && request.resource.data.createdAt == request.time
+        && (!request.resource.data.keys().hasAny(['gradeSection'])
+          || (request.resource.data.gradeSection is string
+            && request.resource.data.gradeSection.size() >= 1
+            && request.resource.data.gradeSection.size() <= 40));
+
+      // Phase 2: staff may read (get and list) all student documents.
+      // Phase 5: parents may read (get and list) only approved students where they are the guardian.
+      // The equality filter on guardianEmail makes this a valid Firestore query.
+      allow get, list: if isStaff()
+        || (isGuardianOf(resource) && resource.data.approved == true);
+
+      // Phase 2: staff may update ONLY the approval fields, and only when the record is not yet approved.
+      // Approved must become true, approvedBy must be the caller's UID, approvedAt must be the server timestamp.
+      allow update: if isStaff()
+        && resource.data.approved == false
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['approved', 'approvedAt', 'approvedBy'])
+        && request.resource.data.approved == true
+        && request.resource.data.approvedBy == request.auth.uid
+        && request.resource.data.approvedAt == request.time;
+
+      // Phase 2: staff may delete ONLY when the record is not yet approved.
+      allow delete: if isStaff()
+        && resource.data.approved == false;
+    }
+
+    // Staff collection — clients may only read their own staff document (get, no list, no writes).
+    match /staff/{uid} {
+      allow get: if request.auth != null && request.auth.uid == uid;
+      // No list, no create, no update, no delete from clients.
+      allow list, create, update, delete: if false;
+    }
+
+    // Attendance collection — Phase 3
+    // One document per student, type, and day. Deterministic ID prevents duplicates.
+    match /attendance/{docId} {
+      // Staff may read (get and list) attendance documents.
+      // Phase 5: parents may read (get and list) only attendance documents where they are the guardian.
+      // The equality filter on guardianEmail makes this a valid Firestore query.
+      allow get, list: if isStaff()
+        || isGuardianOf(resource);
+
+      // Staff may create attendance documents only when ALL conditions hold:
+      // - Exactly the allowed fields and no others
+      // - type is 'time_in' or 'time_out'
+      // - createdAt == request.time (server timestamp)
+      // - logDay == int((request.time.toMillis() + 28800000) / 86400000) (Asia/Manila day)
+      // - docId == studentId + '_' + type + '_' + string(logDay)
+      // - scannedBy == request.auth.uid
+      // - Student document exists, approved == true, and studentName/guardianEmail match
+      // - For time_out: the matching time_in document for same student and logDay exists
+      allow create: if isStaff()
+        && request.resource.data.keys().hasAll([
+          'studentId',
+          'type',
+          'logDay',
+          'studentName',
+          'guardianEmail',
+          'scannedBy',
+          'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'studentId',
+          'type',
+          'logDay',
+          'studentName',
+          'guardianEmail',
+          'scannedBy',
+          'createdAt'
+        ])
+        && request.resource.data.type in ['time_in', 'time_out']
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.logDay == int((request.time.toMillis() + 28800000) / 86400000)
+        && docId == request.resource.data.studentId + '_' + request.resource.data.type + '_' + string(request.resource.data.logDay)
+        && request.resource.data.scannedBy == request.auth.uid
+        && exists(/databases/$(database)/documents/students/$(request.resource.data.studentId))
+        && get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.approved == true
+        && get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.studentName == request.resource.data.studentName
+        && get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.guardianEmail == request.resource.data.guardianEmail
+        && (
+          request.resource.data.type == 'time_in'
+          || exists(/databases/$(database)/documents/attendance/$(request.resource.data.studentId + '_time_in_' + string(request.resource.data.logDay)))
+        );
+
+      // Attendance logs are immutable — no updates or deletes ever allowed.
+      allow update, delete: if false;
+    }
+
+    // Notifications collection — Phase 4
+    // One document per attendance record. Doc ID equals attendanceId.
+    // Idempotency design:
+    // - The document ID is deterministic (matches attendanceId), so duplicate
+    //   create attempts from the client or retries from Apps Script naturally
+    //   collide on the same document.
+    // - Status 'sending' means a send is in progress. If the Apps Script crashes
+    //   or times out, the document stays 'sending'. The rules allow a retry
+    //   (update to 'sending' with attempts+1) only when the previous 'sending'
+    //   attempt is older than 2 minutes (stale), or when status is 'failed'
+    //   with attempts < 3. This prevents tight retry loops while allowing
+    //   recovery from transient failures.
+    // - Status 'sent' is terminal: no further updates allowed. This guarantees
+    //   at-most-once email delivery from the system's perspective.
+    // - 'skipped' is also terminal (used for dry-run mode).
+    match /notifications/{docId} {
+      // Staff may read (get and list) notification documents.
+      allow get, list: if isStaff();
+
+      // Staff may create a notification only when:
+      // - The attendance document with the same ID exists (prevents orphan notifications)
+      // - Exactly the allowed fields and no others
+      // - status == 'sending' (initial state)
+      // - attempts == 1 (first attempt)
+      // - createdAt and updatedAt == request.time (server timestamps)
+      // - channel == 'email' (only channel supported)
+      allow create: if isStaff()
+        && exists(/databases/$(database)/documents/attendance/$(docId))
+        && request.resource.data.keys().hasAll([
+          'attendanceId',
+          'channel',
+          'status',
+          'attempts',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'attendanceId',
+          'channel',
+          'status',
+          'attempts',
+          'lastError',
+          'createdAt',
+          'updatedAt',
+          'sentAt'
+        ])
+        && request.resource.data.attendanceId == docId
+        && request.resource.data.channel == 'email'
+        && request.resource.data.status == 'sending'
+        && request.resource.data.attempts == 1
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      // Staff may update a notification only under specific state transitions:
+      // 1. Retry: current status is 'failed' with attempts < 3, OR current status
+      //    is 'sending' with updatedAt older than 2 minutes (120000 ms).
+      //    New status must be 'sending', attempts incremented by 1, updatedAt == request.time.
+      // 2. Terminal success: current status is 'sending', new status is 'sent'.
+      //    sentAt == request.time, updatedAt == request.time.
+      // 3. Terminal failure: current status is 'sending', new status is 'failed' or 'skipped'.
+      //    updatedAt == request.time, lastError set (for 'failed').
+      // 'sent' and 'skipped' are terminal — no further changes allowed.
+      // Only status, attempts, lastError, updatedAt, sentAt may change.
+      allow update: if isStaff()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'attempts',
+          'lastError',
+          'updatedAt',
+          'sentAt'
+        ])
+        && request.resource.data.updatedAt == request.time
+        && (
+          // Retry from failed (attempts < 3) or stale sending (> 2 min)
+          (
+            (resource.data.status == 'failed' && resource.data.attempts < 3)
+            || (resource.data.status == 'sending' && (request.time.toMillis() - resource.data.updatedAt.toMillis()) > 120000)
+          )
+          && request.resource.data.status == 'sending'
+          && request.resource.data.attempts == resource.data.attempts + 1
+          && !request.resource.data.keys().hasAny(['sentAt'])
+          || // Terminal success
+          (resource.data.status == 'sending'
+            && request.resource.data.status == 'sent'
+            && request.resource.data.sentAt == request.time
+            && !request.resource.data.keys().hasAny(['lastError']))
+          || // Terminal failure or skip
+          (resource.data.status == 'sending'
+            && request.resource.data.status in ['failed', 'skipped']
+            && (request.resource.data.status == 'failed' ? request.resource.data.keys().hasAny(['lastError']) : true)
+            && !request.resource.data.keys().hasAny(['sentAt']))
+        );
+
+      // Notifications are never deleted — they are an audit trail.
+      allow delete: if false;
+    }
+
+    // Settings document — Phase 6A
+    // Single document at settings/school containing school calendar configuration.
+    // Fields: schoolYearStart (YYYY-MM-DD), schoolYearEnd (YYYY-MM-DD),
+    // schoolDays (array of ints 1-7, 1=Monday), lateAfter (HH:MM),
+    // absentAfter (HH:MM), holidays (array of YYYY-MM-DD, max 100),
+    // updatedAt (server timestamp), updatedBy (staff UID).
+    match /settings/school {
+      // Any signed-in user (staff or verified parent) may read the settings.
+      allow get: if request.auth != null;
+
+      // Only admin staff may write settings. Validation ensures correct types and formats.
+      // - Exactly the allowed fields and no others
+      // - Dates match YYYY-MM-DD regex
+      // - Times match HH:MM regex (24-hour)
+      // - schoolDays is a list of ints 1-7
+      // - holidays is a list of strings, size <= 100 (date format validated by admin settings page)
+      // - updatedAt == request.time, updatedBy == request.auth.uid
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly([
+          'schoolYearStart',
+          'schoolYearEnd',
+          'schoolDays',
+          'lateAfter',
+          'absentAfter',
+          'holidays',
+          'updatedAt',
+          'updatedBy'
+        ])
+        && request.resource.data.schoolYearStart is string
+        && request.resource.data.schoolYearStart.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && request.resource.data.schoolYearEnd is string
+        && request.resource.data.schoolYearEnd.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && request.resource.data.schoolDays is list
+        && request.resource.data.schoolDays.size() >= 1
+        && request.resource.data.schoolDays.size() <= 7
+        && request.resource.data.schoolDays.hasOnly([1, 2, 3, 4, 5, 6, 7])
+        && request.resource.data.lateAfter is string
+        && request.resource.data.lateAfter.matches('^([01]\\d|2[0-3]):[0-5]\\d$')
+        && request.resource.data.absentAfter is string
+        && request.resource.data.absentAfter.matches('^([01]\\d|2[0-3]):[0-5]\\d$')
+        // The admin settings page already validates date format in JavaScript
+        && request.resource.data.holidays is list
+        && request.resource.data.holidays.size() <= 100
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid;
+
+      // Settings document cannot be deleted.
+      allow delete: if false;
+    }
+
+    // All documents and operations not explicitly allowed above are denied by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

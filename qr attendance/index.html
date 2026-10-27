@@ -1,84 +1,173 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Student Registration — QR Attendance</title>
-  <link rel="stylesheet" href="css/styles.css" />
-</head>
-<body>
-  <main class="container">
-    <header>
-      <h1>Student Registration</h1>
-      <p class="subtitle">Get your unique QR code for attendance check-in</p>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#12263A">
+    <title>Register for your attendance QR — School attendance</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2228%22%20height%3D%2228%22%20viewBox%3D%220%200%2028%2028%22%20fill%3D%22none%22%20stroke%3D%22%237FD6BE%22%20stroke-width%3D%222%22%3E%3Crect%20x%3D%223%22%20y%3D%223%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%2217%22%20y%3D%223%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%223%22%20y%3D%2217%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Cpath%20d%3D%22M17%2017h3v3h-3zM22%2022h3M22%2017v2%22%2F%3E%3C%2Fsvg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
+      integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSQX0FslNhTDadL4O5SAGapGt4FodqL8My0mA=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+      defer
+    ></script>
+    <script type="module" src="js/site-config.js"></script>
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <header class="site-header" role="banner">
+      <div class="site-header-inner">
+        <div class="site-header-top">
+          <div class="header-brand">
+            <svg class="logo-mark" width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <rect x="3" y="3" width="8" height="8" rx="1"/>
+              <rect x="17" y="3" width="8" height="8" rx="1"/>
+              <rect x="3" y="17" width="8" height="8" rx="1"/>
+              <path d="M17 17h3v3h-3zM22 22h3M22 17v2"/>
+            </svg>
+            <div class="header-copy">
+              <span class="school-name">[SCHOOL NAME]</span>
+              <h1 class="page-title" id="page-title">Register for your attendance QR</h1>
+            </div>
+          </div>
+        </div>
+        <p class="subtitle">One time only. Your guardian gets an email when you arrive and leave.</p>
+      </div>
     </header>
 
-    <!-- Registration form -->
-    <section id="registration-form" class="card" aria-labelledby="form-title">
-      <h2 id="form-title">Register Student</h2>
-      <form id="reg-form" novalidate>
-        <!-- Honeypot (hidden from humans, filled by bots) -->
-        <input type="text" name="website" tabindex="-1" autocomplete="off" style="display:none;" aria-hidden="true" />
+    <main class="page-shell page-shell--narrow">
+      <section class="card registration-card" aria-labelledby="page-title">
+        <form id="registration-form" novalidate>
+          <div class="field">
+            <label for="student-name">Student full name</label>
+            <input
+              id="student-name"
+              name="studentName"
+              type="text"
+              autocomplete="name"
+              minlength="2"
+              maxlength="100"
+              required
+              aria-describedby="student-name-error"
+            >
+            <p class="field-error" id="student-name-error"></p>
+          </div>
 
-        <div class="field">
-          <label for="student-name">Student Name <span class="req" aria-hidden="true">*</span></label>
-          <input type="text" id="student-name" name="student_name" required autocomplete="name" maxlength="100" />
-          <span class="error" id="err-student-name" aria-live="polite"></span>
-        </div>
+          <div class="field">
+            <label for="grade-section">Grade and section <span class="optional">(optional)</span></label>
+            <input
+              id="grade-section"
+              name="gradeSection"
+              type="text"
+              autocomplete="off"
+              maxlength="40"
+              placeholder="e.g., Grade 7 - St. Francis"
+              aria-describedby="grade-section-hint grade-section-error"
+            >
+            <p class="field-hint" id="grade-section-hint">Optional: student's grade and section.</p>
+            <p class="field-error" id="grade-section-error"></p>
+          </div>
 
-        <div class="field">
-          <label for="guardian-name">Guardian Name <span class="req" aria-hidden="true">*</span></label>
-          <input type="text" id="guardian-name" name="guardian_name" required autocomplete="name" maxlength="100" />
-          <span class="error" id="err-guardian-name" aria-live="polite"></span>
-        </div>
+          <div class="field">
+            <label for="guardian-name">Parent / guardian name</label>
+            <input
+              id="guardian-name"
+              name="guardianName"
+              type="text"
+              autocomplete="name"
+              minlength="2"
+              maxlength="100"
+              required
+              aria-describedby="guardian-name-error"
+            >
+            <p class="field-error" id="guardian-name-error"></p>
+          </div>
 
-        <div class="field">
-          <label for="guardian-phone">Guardian Phone (Philippine mobile) <span class="req" aria-hidden="true">*</span></label>
-          <input type="tel" id="guardian-phone" name="guardian_phone" required autocomplete="tel"
-                 placeholder="09XXXXXXXXX or +639XXXXXXXXX" maxlength="13" />
-          <span class="hint">Format: 09XXXXXXXXX or +639XXXXXXXXX</span>
-          <span class="error" id="err-guardian-phone" aria-live="polite"></span>
-        </div>
+          <div class="field">
+            <label for="guardian-email">Guardian email</label>
+            <input
+              id="guardian-email"
+              name="guardianEmail"
+              type="email"
+              autocomplete="email"
+              maxlength="253"
+              required
+              aria-describedby="guardian-email-error"
+            >
+            <p class="field-error" id="guardian-email-error"></p>
+          </div>
 
-        <div class="field checkbox-field">
-          <input type="checkbox" id="consent" name="consent" required />
-          <label for="consent">I confirm the guardian agreed to receive SMS attendance notifications.</label>
-          <span class="error" id="err-consent" aria-live="polite"></span>
-        </div>
+          <div class="field">
+            <label for="guardian-phone">Guardian mobile number <span class="optional">(optional)</span></label>
+            <input
+              id="guardian-phone"
+              name="guardianPhone"
+              type="tel"
+              autocomplete="tel"
+              inputmode="tel"
+              placeholder="09XX XXX XXXX"
+              aria-describedby="phone-hint guardian-phone-error"
+            >
+            <p class="field-hint" id="phone-hint">Philippine mobile number, e.g. 09XX XXX XXXX</p>
+            <p class="field-error" id="guardian-phone-error"></p>
+          </div>
 
-        <button type="submit" id="submit-btn" class="btn btn-primary" disabled>
-          <span class="btn-text">Generate QR Code</span>
-          <span class="btn-loading" hidden>Generating…</span>
-        </button>
-      </form>
-    </section>
+          <div class="honeypot" aria-hidden="true" style="position: absolute; left: -9999px;">
+            <label for="website">Leave this field empty</label>
+            <input
+              id="website"
+              name="website"
+              type="text"
+              tabindex="-1"
+              autocomplete="off"
+            >
+          </div>
 
-    <!-- Result card (hidden initially) -->
-    <section id="result-card" class="card" hidden aria-labelledby="result-title">
-      <h2 id="result-title">Your QR Code</h2>
-      <p class="success-message">Registration successful! Save or print this QR code.</p>
+          <div class="consent-card">
+            <div class="consent-field">
+              <input id="consent" name="consent" type="checkbox" required>
+              <label for="consent">My guardian agrees to receive attendance notifications by email, and the school may store these details for that purpose.</label>
+            </div>
+            <p class="field-error" id="consent-error"></p>
+          </div>
 
-      <div class="qr-wrapper">
-        <canvas id="qr-canvas" aria-label="QR code containing student UUID"></canvas>
-        <div class="student-info" id="student-info"></div>
-      </div>
+          <p class="form-message" id="form-message" role="status" aria-live="polite"></p>
+          <button class="btn btn-primary btn-full" id="submit-button" type="submit">Get my QR code</button>
+        </form>
 
-      <div class="actions">
-        <button type="button" id="download-btn" class="btn btn-secondary">Download PNG</button>
-        <button type="button" id="print-btn" class="btn btn-secondary">Print</button>
-        <button type="button" id="new-btn" class="btn btn-ghost">Register Another</button>
-      </div>
-    </section>
-  </main>
+        <section class="result" id="registration-result" aria-labelledby="result-title" tabindex="-1" hidden>
+          <div style="text-align: center;">
+            <div class="result-badge">
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="vertical-align: middle;">
+                <polyline points="4 10 8 14 16 6"></polyline>
+              </svg>
+              <span>Registered</span>
+            </div>
+            <h2 id="result-title" style="margin-bottom: 8px;">This is your QR code</h2>
+            <p class="approval-note" style="margin-bottom: 16px;">Your QR works after a teacher approves your registration.</p>
+          </div>
 
-  <footer>
-    <p>QR Attendance System — Phase 1</p>
-  </footer>
+          <div class="qr-frame" id="qr-code" aria-label="Your student attendance QR code"></div>
+          <p class="student-label" id="registered-student-name"></p>
+          <p class="guardian-label" id="registered-guardian-name"></p>
 
-  <!-- QRCode library via CDN -->
-  <script src="https://unpkg.com/qrcode@1.5.3/browser/qrcode.min.js" crossorigin="anonymous"></script>
-  <!-- Supabase client via CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" crossorigin="anonymous"></script>
-  <script src="js/app.js"></script>
-</body>
+          <div class="result-actions">
+            <button class="btn btn-primary" id="download-button" type="button">Download PNG</button>
+            <button class="btn btn-secondary" id="print-button" type="button">Print</button>
+          </div>
+
+          <p class="approval-note" style="margin-top: 16px;">Lost it? Ask your teacher to reprint it.</p>
+          <p class="form-message" id="result-message" role="status" aria-live="polite"></p>
+        </section>
+      </section>
+
+      <p class="page-footer">Your QR holds a random ID only. No name or email is stored inside it.</p>
+    </main>
+  </body>
 </html>

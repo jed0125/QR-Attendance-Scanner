@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#12263A">
+    <title>Today's attendance — School attendance</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2228%22%20height%3D%2228%22%20viewBox%3D%220%200%2028%2028%22%20fill%3D%22none%22%20stroke%3D%22%237FD6BE%22%20stroke-width%3D%222%22%3E%3Crect%20x%3D%223%22%20y%3D%223%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%2217%22%20y%3D%223%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Crect%20x%3D%223%22%20y%3D%2217%22%20width%3D%228%22%20height%3D%228%22%20rx%3D%221%22%2F%3E%3Cpath%20d%3D%22M17%2017h3v3h-3zM22%2022h3M22%2017v2%22%2F%3E%3C%2Fsvg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+    <script type="module" src="js/site-config.js"></script>
+    <script type="module" src="js/dashboard.js"></script>
+  </head>
+  <body>
+    <header class="site-header" role="banner">
+      <div class="site-header-inner">
+        <div class="site-header-top">
+          <div class="header-brand">
+            <svg class="logo-mark" width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <rect x="3" y="3" width="8" height="8" rx="1"/>
+              <rect x="17" y="3" width="8" height="8" rx="1"/>
+              <rect x="3" y="17" width="8" height="8" rx="1"/>
+              <path d="M17 17h3v3h-3zM22 22h3M22 17v2"/>
+            </svg>
+            <div class="header-copy">
+              <span class="school-name">[SCHOOL NAME]</span>
+              <h1 class="page-title" id="page-title">Today's attendance</h1>
+            </div>
+          </div>
+          <nav class="nav-bar" aria-label="Staff navigation"></nav>
+        </div>
+        <p class="subtitle">Live attendance status, check-ins, departures, and notifications.</p>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main-content" hidden>
+      <p class="form-message" id="status-message" role="status" aria-live="polite"></p>
+
+      <!-- Stat-card grid (1 to 4 columns) -->
+      <section class="dashboard-stat-grid" id="summary-cards" aria-labelledby="stat-heading">
+        <h2 id="stat-heading" class="visually-hidden">Attendance summary</h2>
+
+        <div class="stat-card" id="card-approved">
+          <div class="stat-card__label">Approved students</div>
+          <div class="stat-card__value" id="val-approved">—</div>
+        </div>
+
+        <div class="stat-card" id="card-arrived">
+          <div class="stat-card__label">Arrived</div>
+          <div class="stat-card__value" id="val-arrived">—</div>
+        </div>
+
+        <div class="stat-card" id="card-late">
+          <div class="stat-card__label">Late</div>
+          <div class="stat-card__value" id="val-late">—</div>
+        </div>
+
+        <div class="stat-card" id="card-left">
+          <div class="stat-card__label">Left</div>
+          <div class="stat-card__value" id="val-left">—</div>
+        </div>
+
+        <div class="stat-card" id="card-absent">
+          <div class="stat-card__label">Not yet in / Absent</div>
+          <div class="stat-card__value" id="val-absent">—</div>
+        </div>
+
+        <div class="stat-card" id="card-failed-emails">
+          <div class="stat-card__label">Emails failed</div>
+          <div class="stat-card__value" id="val-failed-emails" style="color: var(--ds-danger);">0</div>
+        </div>
+
+        <div class="stat-card" id="card-pending" style="grid-column: span 2;">
+          <div class="stat-card__label">Pending approvals</div>
+          <div class="stat-card__value">
+            <a href="approvals.html" class="summary-link" id="link-pending">—</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- Email problems panel (Shown ONLY when problems exist) -->
+      <section class="email-problems-section" id="email-problems-section" hidden aria-labelledby="email-problems-title">
+        <div class="email-problems-header">
+          <h2 id="email-problems-title" style="font-size: 1.15rem; color: #8A4A0B; display: flex; align-items: center; gap: 8px;">
+            <span>⚠️</span> Email delivery issues
+          </h2>
+          <span class="chip chip--failed" id="email-problems-count">Problems</span>
+        </div>
+        <p class="form-message" id="email-problems-status" role="status" aria-live="polite"></p>
+        <div class="table-wrapper" id="email-problems-wrapper">
+          <table class="email-problems-table" id="email-problems-table">
+            <thead>
+              <tr>
+                <th scope="col">Student</th>
+                <th scope="col">Type</th>
+                <th scope="col">Time</th>
+                <th scope="col">Guardian email</th>
+                <th scope="col">Status</th>
+                <th scope="col">Action</th>
+              </tr>
+            </thead>
+            <tbody id="email-problems-body">
+              <!-- Rows inserted by JavaScript -->
+            </tbody>
+          </table>
+        </div>
+        <p class="empty-state" id="email-all-sent" hidden>All emails sent successfully</p>
+      </section>
+
+      <!-- Filter card: tabs & search -->
+      <section class="filter-bar-card" aria-labelledby="filters-title">
+        <h2 id="filters-title" class="visually-hidden">Filters</h2>
+
+        <div class="segmented" id="status-tabs" role="tablist" aria-label="Status filters" style="margin-bottom: 14px; flex-wrap: wrap;">
+          <button role="tab" class="tab-button active" aria-selected="true" data-status="all">All</button>
+          <button role="tab" class="tab-button" aria-selected="false" data-status="arrived">Arrived</button>
+          <button role="tab" class="tab-button" aria-selected="false" data-status="late">Late</button>
+          <button role="tab" class="tab-button" aria-selected="false" data-status="not_yet_in">Not yet in</button>
+          <button role="tab" class="tab-button" aria-selected="false" data-status="absent">Absent</button>
+          <button role="tab" class="tab-button" aria-selected="false" data-status="left">Left</button>
+        </div>
+
+        <div class="filter-row">
+          <div class="field" style="flex: 1; min-width: 220px; margin-bottom: 0;">
+            <label for="name-search" class="visually-hidden">Search by name</label>
+            <input type="search" id="name-search" placeholder="Search student name…" aria-label="Search student name">
+          </div>
+          <div class="field" style="flex: 0 0 240px; margin-bottom: 0;">
+            <label for="grade-filter" class="visually-hidden">Grade/Section</label>
+            <select id="grade-filter" aria-label="Filter by grade/section">
+              <option value="">All grades/sections</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- Student list table -->
+      <section class="table-section" aria-labelledby="table-title">
+        <h2 id="table-title" class="visually-hidden">Today's attendance list</h2>
+        <div class="table-wrapper">
+          <table class="dashboard-table" id="dashboard-table">
+            <thead>
+              <tr>
+                <th scope="col">Student</th>
+                <th scope="col">Grade/Section</th>
+                <th scope="col">Time in</th>
+                <th scope="col">Time out</th>
+                <th scope="col">Status</th>
+                <th scope="col">Email status</th>
+              </tr>
+            </thead>
+            <tbody id="dashboard-body">
+              <!-- Rows inserted by JavaScript -->
+            </tbody>
+          </table>
+        </div>
+        <p class="empty-state card" id="empty-state" hidden>No students match the current filters</p>
+      </section>
+    </main>
+
+    <footer class="page-footer" id="page-footer" hidden>
+      Your information is used for school attendance purposes.
+    </footer>
+  </body>
+</html>

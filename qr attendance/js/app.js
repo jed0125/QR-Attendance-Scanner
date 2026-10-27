@@ -1,229 +1,227 @@
-// QR Attendance System — Phase 1 registration app
-// Uses Supabase JS client and QRCode library via CDN
+import { doc, serverTimestamp, setDoc } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js";
+import { db } from "./firebase-config.js";
+import "./site-config.js";
 
-(() => {
-  let supabase;
-  let QRCode;
+const form = document.querySelector("#registration-form");
+const submitButton = document.querySelector("#submit-button");
+const formMessage = document.querySelector("#form-message");
+const resultSection = document.querySelector("#registration-result");
+const resultMessage = document.querySelector("#result-message");
+const qrContainer = document.querySelector("#qr-code");
+const studentNameOutput = document.querySelector("#registered-student-name");
+const guardianNameOutput = document.querySelector("#registered-guardian-name");
+const downloadButton = document.querySelector("#download-button");
+const printButton = document.querySelector("#print-button");
 
-  // Initialize when libraries are loaded
-  function init() {
-    supabase = supabaseJs.createClient(
-      window.SUPABASE_URL,
-      window.SUPABASE_ANON_KEY
-    );
-    QRCode = window.QRCode;
-
-    setupForm();
+const fields = {
+  studentName: {
+    input: document.querySelector("#student-name"),
+    error: document.querySelector("#student-name-error")
+  },
+  guardianName: {
+    input: document.querySelector("#guardian-name"),
+    error: document.querySelector("#guardian-name-error")
+  },
+  guardianEmail: {
+    input: document.querySelector("#guardian-email"),
+    error: document.querySelector("#guardian-email-error")
+  },
+  guardianPhone: {
+    input: document.querySelector("#guardian-phone"),
+    error: document.querySelector("#guardian-phone-error"),
+    descriptionId: "phone-hint"
+  },
+  gradeSection: {
+    input: document.querySelector("#grade-section"),
+    error: document.querySelector("#grade-section-error"),
+    descriptionId: "grade-section-hint"
+  },
+  consent: {
+    input: document.querySelector("#consent"),
+    error: document.querySelector("#consent-error")
   }
+};
 
-  // Philippine mobile number validation & normalization
-  function normalizePhone(input) {
-    // Remove spaces and dashes
-    let phone = input.trim().replace(/[\s-]/g, '');
-
-    // Already normalized: 639XXXXXXXXX (exactly 12 digits)
-    if (/^639\d{9}$/.test(phone)) return phone;
-
-    // Local format started with 0: 09XXXXXXXXX
-    if (/^09\d{9}$/.test(phone)) return '63' + phone.slice(1);
-
-    // With +63 prefix: +639XXXXXXXXX or +63 9XXXXXXXXX
-    if (/^\+?639\d{9}$/.test(phone)) {
-      return phone.replace(/^\+/, '');
-    }
-
-    // With just 63 prefix (no +): already 12 digits starting with 639
-    if (/^639\d{9}$/.test(phone)) return phone;
-
-    return null; // Invalid
-  }
-
-  function validatePhone(phone) {
-    return normalizePhone(phone) !== null;
-  }
-
-  function setupForm() {
-    const form = document.getElementById('reg-form');
-    const studentNameInput = document.getElementById('student-name');
-    const guardianNameInput = document.getElementById('guardian-name');
-    const phoneInput = document.getElementById('guardian-phone');
-    const consentInput = document.getElementById('consent');
-    const submitBtn = document.getElementById('submit-btn');
-
-    // Form fields reference for errors
-    const errStudentName = document.getElementById('err-student-name');
-    const errGuardianName = document.getElementById('err-guardian-name');
-    const errPhone = document.getElementById('err-guardian-phone');
-    const errConsent = document.getElementById('err-consent');
-
-    function setError(elId, msg) {
-      const el = document.getElementById(elId);
-      if (el) el.textContent = msg;
-    }
-
-    function clearErrors() {
-      errStudentName.textContent = '';
-      errGuardianName.textContent = '';
-      errPhone.textContent = '';
-      errConsent.textContent = '';
-    }
-
-    // Enable button when all fields valid
-    function updateButtonState() {
-      const hasValues = studentNameInput.value.trim() &&
-        guardianNameInput.value.trim() &&
-        validatePhone(phoneInput.value) &&
-        consentInput.checked;
-      submitBtn.disabled = !hasValues;
-    }
-
-    // Real-time validation
-    studentNameInput.addEventListener('input', () => {
-      clearErrors();
-      updateButtonState();
-    });
-    guardianNameInput.addEventListener('input', () => {
-      clearErrors();
-      updateButtonState();
-    });
-    phoneInput.addEventListener('input', () => {
-      clearErrors();
-      updateButtonState();
-    });
-    consentInput.addEventListener('change', () => {
-      clearErrors();
-      updateButtonState();
-    });
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-
-      // Reset errors
-      clearErrors();
-
-      // Check honeypot (should be empty)
-      const honeypot = form.elements['website'];
-      if (honeypot && honeypot.value) {
-        console.warn('Spam detected (honeypot filled)');
-        return;
-      }
-
-      const studentName = studentNameInput.value.trim();
-      const guardianName = guardianNameInput.value.trim();
-      const phoneRaw = phoneInput.value.trim();
-
-      // Validate student name
-      if (!studentName) {
-        errStudentName.textContent = 'Student name is required';
-        return;
-      }
-
-      // Validate guardian name
-      if (!guardianName) {
-        errGuardianName.textContent = 'Guardian name is required';
-        return;
-      }
-
-      // Validate and normalize phone
-      const phoneNorm = normalizePhone(phoneRaw);
-      if (!phoneNorm) {
-        errPhone.textContent = 'Invalid Philippine mobile number';
-        return;
-      }
-
-      // Check consent
-      if (!consentInput.checked) {
-        errConsent.textContent = 'Consent is required';
-        return;
-      }
-
-      // Disable button
-      submitBtn.disabled = true;
-      const originalText = submitBtn.querySelector('.btn-text').textContent;
-      submitBtn.querySelector('.btn-text').hidden = true;
-      submitBtn.querySelector('.btn-loading').hidden = false;
-
-      try {
-        const { data, error } = await supabase.from('students').insert({
-          student_name: studentName,
-          guardian_name: guardianName,
-          guardian_phone: phoneNorm
-        }).select('id').single();
-
-        if (error) throw error;
-
-        // Show QR code
-        const studentId = data.id;
-        showQRCode(studentId, studentName);
-
-      } catch (err) {
-        console.error('Registration error:', err);
-        alert('Registration failed. Please try again.');
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.querySelector('.btn-text').hidden = false;
-        submitBtn.querySelector('.btn-loading').hidden = true;
-      }
-    });
-
-    // Reset button
-    document.getElementById('new-btn').addEventListener('click', () => {
-      document.getElementById('result-card').hidden = true;
-      document.getElementById('registration-form').hidden = false;
-      form.reset();
-      updateButtonState();
-    });
-  }
-
-  function showQRCode(studentId, studentName) {
-    document.getElementById('registration-form').hidden = true;
-    const resultCard = document.getElementById('result-card');
-    const canvas = document.getElementById('qr-canvas');
-    const infoDiv = document.getElementById('student-info');
-
-    // Generate QR code with just the UUID
-    QRCode.toCanvas(canvas, studentId, {
-      width: 240,
-      margin: 2,
-      color: { dark: '#000000', light: '#ffffff' }
-    }, (err) => {
-      if (err) console.error('QR generation error:', err);
-    });
-
-    // Display student info under QR
-    infoDiv.innerHTML = `
-      <p class="name">${escapeHtml(studentName)}</p>
-      <p class="uuid">ID: ${studentId}</p>
-    `;
-
-    resultCard.hidden = false;
-  }
-
-  function escapeHtml(str) {
-    return str.replace(/[&<>"']/g, m => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;',
-      '"': '&quot;', "'": '&#39;'
-    })[m]);
-  }
-
-  // Download PNG handler
-  document.getElementById('download-btn')?.addEventListener('click', () => {
-    const canvas = document.getElementById('qr-canvas');
-    const link = document.createElement('a');
-    link.download = `qr-${new Date().toISOString().slice(0, 10)}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-  });
-
-  // Print handler
-  document.getElementById('print-btn')?.addEventListener('click', () => {
-    window.print();
-  });
-
-  // Start when DOM and libraries ready
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    init();
+function setFieldError(field, message) {
+  field.error.textContent = message;
+  if (field.input.type === "checkbox") {
+    field.input.setAttribute("aria-invalid", String(Boolean(message)));
   } else {
-    document.addEventListener('DOMContentLoaded', init);
+    field.input.setAttribute("aria-invalid", String(Boolean(message)));
+    field.input.setAttribute(
+      "aria-describedby",
+      [field.descriptionId, field.error.id].filter(Boolean).join(" ")
+    );
   }
-})();
+}
+
+function validateName(value, label) {
+  const name = value.trim();
+  if (name.length < 2 || name.length > 100) {
+    return { value: name, error: `${label} must be between 2 and 100 characters.` };
+  }
+  return { value: name, error: "" };
+}
+
+function normalizePhone(value) {
+  const compact = value.trim().replace(/[\s()-]/g, "");
+  if (compact === "") {
+    return { value: "", error: "" };
+  }
+  if (/^09\d{9}$/.test(compact)) {
+    return { value: `63${compact.slice(1)}`, error: "" };
+  }
+  if (/^\+639\d{9}$/.test(compact)) {
+    return { value: compact.slice(1), error: "" };
+  }
+  return {
+    value: "",
+    error: "Enter a valid Philippine mobile number, such as 09171234567 or +639171234567."
+  };
+}
+
+function validateForm() {
+  let valid = true;
+  const student = validateName(fields.studentName.input.value, "Student full name");
+  const guardian = validateName(fields.guardianName.input.value, "Parent / guardian name");
+  const email = fields.guardianEmail.input.value.trim().toLowerCase();
+  const phone = normalizePhone(fields.guardianPhone.input.value);
+
+  setFieldError(fields.studentName, student.error);
+  setFieldError(fields.guardianName, guardian.error);
+
+  const emailValid = email.length < 254
+    && /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(email);
+  const emailError = emailValid ? "" : "Enter a valid email address under 254 characters.";
+  setFieldError(fields.guardianEmail, emailError);
+  setFieldError(fields.guardianPhone, phone.error);
+
+  // Validate gradeSection (optional, max 40 chars)
+  const gradeSection = fields.gradeSection.input.value.trim();
+  let gradeSectionError = "";
+  if (gradeSection.length > 40) {
+    gradeSectionError = "Grade and section must be 40 characters or fewer.";
+  }
+  setFieldError(fields.gradeSection, gradeSectionError);
+
+  const consentError = fields.consent.input.checked
+    ? ""
+    : "Guardian consent is required to register.";
+  setFieldError(fields.consent, consentError);
+
+  valid = !student.error && !guardian.error && !emailError && !phone.error && !gradeSectionError && !consentError;
+  return {
+    valid,
+    values: {
+      studentName: student.value,
+      guardianName: guardian.value,
+      guardianEmail: email,
+      guardianPhone: phone.value,
+      gradeSection: gradeSection || ""
+    }
+  };
+}
+
+function renderQr(id) {
+  if (typeof window.QRCode !== "function") {
+    throw new Error("The QR code library did not load.");
+  }
+  qrContainer.replaceChildren();
+  new window.QRCode(qrContainer, {
+    text: id,
+    width: 230,
+    height: 230,
+    colorDark: "#12263A",
+    colorLight: "#ffffff",
+    correctLevel: window.QRCode.CorrectLevel.M
+  });
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  formMessage.textContent = "";
+  resultMessage.textContent = "";
+
+  const honeypot = document.querySelector("#website");
+  if (honeypot.value.trim() !== "") {
+    formMessage.textContent = "Unable to submit this registration. Please try again.";
+    return;
+  }
+
+  const { valid, values } = validateForm();
+  if (!valid) {
+    formMessage.textContent = "Please correct the highlighted fields.";
+    const firstInvalid = Object.values(fields).find((field) => (
+      field.input.getAttribute("aria-invalid") === "true"
+    ));
+    firstInvalid?.input.focus();
+    return;
+  }
+
+  if (!window.crypto?.randomUUID) {
+    formMessage.textContent = "This browser cannot create a secure registration ID. Try a current browser.";
+    return;
+  }
+
+  submitButton.disabled = true;
+  submitButton.textContent = "Submitting…";
+
+  const id = window.crypto.randomUUID();
+  const studentPayload = {
+    id,
+    studentName: values.studentName,
+    guardianName: values.guardianName,
+    guardianEmail: values.guardianEmail,
+    guardianPhone: values.guardianPhone,
+    approved: false,
+    consent: true,
+    createdAt: serverTimestamp()
+  };
+  if (values.gradeSection && values.gradeSection.length > 0) {
+    studentPayload.gradeSection = values.gradeSection;
+  }
+
+  try {
+    await setDoc(doc(db, "students", id), studentPayload);
+  } catch (error) {
+    console.error("Student registration failed.", error);
+    formMessage.textContent = "We couldn't save your registration. Check your connection and Firebase setup, then try again.";
+    submitButton.disabled = false;
+    submitButton.textContent = "Get my QR code";
+    return;
+  }
+
+  form.hidden = true;
+  resultSection.hidden = false;
+  resultSection.focus();
+  studentNameOutput.textContent = values.studentName;
+  if (guardianNameOutput) {
+    guardianNameOutput.textContent = `Guardian: ${values.guardianName}`;
+  }
+  try {
+    renderQr(id);
+  } catch (error) {
+    console.error("Registration was saved, but QR generation failed.", error);
+    resultMessage.textContent = "Your registration was saved, but the QR code could not be displayed. Please contact the school; do not submit again.";
+    downloadButton.disabled = true;
+    printButton.disabled = true;
+  }
+});
+
+downloadButton.addEventListener("click", () => {
+  const canvas = qrContainer.querySelector("canvas");
+  const image = qrContainer.querySelector("img");
+  const imageUrl = canvas?.toDataURL("image/png") || image?.src;
+  if (!imageUrl) {
+    resultMessage.textContent = "The QR image is not ready to download. Please try again.";
+    return;
+  }
+  const downloadLink = document.createElement("a");
+  downloadLink.href = imageUrl;
+  downloadLink.download = "student-attendance-qr.png";
+  downloadLink.click();
+});
+
+printButton.addEventListener("click", () => {
+  window.print();
+});

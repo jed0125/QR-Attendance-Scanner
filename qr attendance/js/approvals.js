@@ -1,162 +1,326 @@
-// Approvals page logic
-(() => {
-  async function init() {
-    // Auth guard – if not teacher, will redirect
-    const authorized = await window.qrAttendanceAuth.requireTeacher();
-    if (!authorized) return;
+import { getFirestore, collection, query, where, getDocs, updateDoc, deleteDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js";
+import { app } from "./firebase-config.js";
+import { initAuthGuard, getCurrentStaff, hidePageContent, showPageContent, signOutAndRedirect } from "./auth-guard.js";
+import { initStaffNav } from "./nav.js";
+import "./site-config.js";
 
-    // Get teacher name for header
-    const { data: sessionData } = await window.qrAttendanceAuth.supabaseClient.auth.getSession();
-    const { data: teacher } = await window.qrAttendanceAuth.supabaseClient
-      .from('teachers')
-      .select('name')
-      .eq('id', sessionData.session.user.id)
-      .single();
+const db = getFirestore(app);
 
-    document.getElementById('teacher-name-sub').textContent =
-      teacher && teacher.name ? teacher.name : 'Teacher';
+// DOM elements
+const statusMessage = document.querySelector("#status-message");
+const refreshButton = document.querySelector("#refresh-button");
+const approvalsBody = document.querySelector("#approvals-body");
+const emptyState = document.querySelector("#empty-state");
+const approvalsTable = document.querySelector("#approvals-table");
+const mainContent = document.querySelector("#main-content");
+const pageFooter = document.querySelector("#page-footer");
 
-    const pendingList = document.getElementById('pending-list');
+// State
+let isLoading = false;
 
-    async function loadPending() {
-      pendingList.innerHTML = '<p class="hint">Loading…</p>';
-      const { data: students, error } = await window.qrAttendanceAuth.supabaseClient
-        .from('students')
-        .select('id, student_name, guardian_name, guardian_phone, created_at')
-        .eq('approved', false)
-        .order('created_at', { ascending: false });
+// Hide page content until auth resolves
+hidePageContent();
 
-      if (error) {
-        console.error('Error loading pending:', error);
-        pendingList.innerHTML = '<p class="hint error">Failed to load pending registrations.</p>';
-        return;
-      }
+// Initialize auth guard
+initAuthGuard().then((staff) => {
+  if (!staff) {
+    window.location.href = "login.html";
+    return;
+  }
 
-      if (!students || students.length === 0) {
-        pendingList.innerHTML = '<p class="hint">No pending registrations.</p>';
-        return;
-      }
+  initStaffNav("approvals.html");
+  showPageContent();
+  mainContent.hidden = false;
+  pageFooter.hidden = false;
+  loadPendingRegistrations();
+});
 
-      pendingList.innerHTML = ''; // clear loading message
+// Refresh button handler
+refreshButton.addEventListener("click", () => {
+  loadPendingRegistrations();
+});
 
-      students.forEach(student => {
-        const row = document.createElement('div');
-        row.className = 'pending-row';
+// Format date in Asia/Manila timezone (12-hour format)
+function formatRegistrationDate(timestamp) {
+  if (!timestamp) return "—";
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  return date.toLocaleString("en-PH", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  });
+}
 
-        const name = student.student_name || '(no name)';
-        const guardian = student.guardian_name || '(no guardian)';
-        const phone = student.guardian_phone || '(no phone)';
-        const created = new Date(student.created_at);
-        const dateStr = created.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-        const timeStr = created.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+// Create a card for a pending student
+function createStudentCard(student) {
+  const card = document.createElement("article");
+  card.className = "pending-card";
+  card.dataset.studentId = student.id;
+  card.dataset.studentName = student.studentName || "Student";
 
-        row.innerHTML = `
-          <div class="name">${escapeHtml(name)}</div>
-          <div class="meta">
-            <span>Guardian: ${escapeHtml(guardian)}</span>
-            <span>Phone: ${escapeHtml(phone)}</span>
-            <span>Registered: ${dateStr} at ${timeStr}</span>
-          </div>
-          <div class="actions">
-            <button type="button" class="btn btn-primary approve-btn" data-id="${student.id}">Approve</button>
-            <button type="button" class="btn btn-secondary reject-btn" data-id="${student.id}">Reject</button>
-          </div>
-        `;
+  // Card Header: Student Name + Grade/Section
+  const header = document.createElement("div");
+  header.className = "pending-card__header";
 
-        pendingList.appendChild(row);
-      });
+  const nameEl = document.createElement("h3");
+  nameEl.className = "pending-card__name";
+  nameEl.textContent = student.studentName || "—";
+  header.appendChild(nameEl);
 
-      // Attach event listeners to buttons
-      pendingList.querySelectorAll('.approve-btn').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-          const id = btn.dataset.id;
-          if (!confirm(`Approve student ${escapeHtml(name)}?`)) return;
-          btn.disabled = true;
-          btn.textContent = 'Approving…';
+  const gradeEl = document.createElement("p");
+  gradeEl.className = "pending-card__grade";
+  gradeEl.textContent = student.gradeSection ? `Grade / Section: ${student.gradeSection}` : "Grade / Section: Not specified";
+  header.appendChild(gradeEl);
 
-          const { error } = await window.qrAttendanceAuth.supabaseClient
-            .from('students')
-            .update({ approved: true })
-            .eq('id', id);
+  card.appendChild(header);
 
-          if (error) {
-            console.error('Approval error:', error);
-            alert('Failed to approve student.');
-          } else {
-            // Remove the row from UI
-            btn.closest('.pending-row').remove();
-            // Re-check if list is now empty
-            if (pendingList.children.length === 0) {
-              pendingList.innerHTML = '<p class="hint">No pending registrations.</p>';
-            }
-          }
-          btn.disabled = false;
-          btn.textContent = 'Approve';
-        });
-      });
+  // Card Body: Details (Guardian, Email, Phone, Registered time)
+  const details = document.createElement("div");
+  details.className = "pending-card__details";
 
-      pendingList.querySelectorAll('.reject-btn').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-          const id = btn.dataset.id;
-          if (!confirm(`Delete registration for ${escapeHtml(name)}? This cannot be undone.`)) return;
-          btn.disabled = true;
-          btn.textContent = 'Deleting…';
+  const rows = [
+    { label: "Guardian", value: student.guardianName || "—" },
+    { label: "Email", value: student.guardianEmail || "—" },
+    { label: "Phone", value: student.guardianPhone || "—" },
+    { label: "Registered", value: formatRegistrationDate(student.createdAt) }
+  ];
 
-          const { error } = await window.qrAttendanceAuth.supabaseClient
-            .from('students')
-            .delete()
-            .eq('id', id);
+  rows.forEach(({ label, value }) => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "pending-card__detail-row";
 
-          if (error) {
-            console.error('Rejection error:', error);
-            alert('Failed to delete student.');
-          } else {
-            btn.closest('.pending-row').remove();
-            if (pendingList.children.length === 0) {
-              pendingList.innerHTML = '<p class="hint">No pending registrations.</p>';
-            }
-          }
-          btn.disabled = false;
-          btn.textContent = 'Reject';
-        });
-      });
+    const labelSpan = document.createElement("span");
+    labelSpan.className = "pending-card__label";
+    labelSpan.textContent = label;
+    rowEl.appendChild(labelSpan);
+
+    const valSpan = document.createElement("span");
+    valSpan.className = "pending-card__value";
+    valSpan.textContent = value;
+    rowEl.appendChild(valSpan);
+
+    details.appendChild(rowEl);
+  });
+
+  card.appendChild(details);
+
+  // Actions: Approve (green) & Reject (red outline)
+  const actions = document.createElement("div");
+  actions.className = "pending-card__actions";
+
+  // Reminder text
+  const reminder = document.createElement("p");
+  reminder.className = "approval-reminder";
+  reminder.textContent = "Confirm the guardian email with the family before approving.";
+  actions.appendChild(reminder);
+
+  const approveButton = document.createElement("button");
+  approveButton.type = "button";
+  approveButton.className = "btn btn-primary approve-button";
+  approveButton.textContent = "Approve";
+  approveButton.addEventListener("click", () => handleApprove(student.id, card));
+
+  const rejectButton = document.createElement("button");
+  rejectButton.type = "button";
+  rejectButton.className = "btn btn-danger-outline reject-button";
+  rejectButton.textContent = "Reject";
+  rejectButton.addEventListener("click", () => handleReject(student.id, card));
+
+  actions.appendChild(approveButton);
+  actions.appendChild(rejectButton);
+  card.appendChild(actions);
+
+  return card;
+}
+
+// Show status message
+function showStatus(message, isError = false) {
+  statusMessage.textContent = message;
+  statusMessage.style.color = isError ? "var(--ds-danger)" : "var(--ds-primary)";
+}
+
+function clearStatus() {
+  statusMessage.textContent = "";
+}
+
+// Set loading state
+function setLoading(loading) {
+  isLoading = loading;
+  refreshButton.disabled = loading;
+  refreshButton.textContent = loading ? "Loading…" : "Refresh";
+
+  const actionButtons = approvalsBody.querySelectorAll(".approve-button, .reject-button");
+  actionButtons.forEach((btn) => {
+    btn.disabled = loading;
+  });
+}
+
+// Load pending registrations (approved == false)
+async function loadPendingRegistrations() {
+  if (isLoading) return;
+
+  setLoading(true);
+  clearStatus();
+  emptyState.hidden = true;
+  approvalsBody.replaceChildren();
+
+  try {
+    const studentsRef = collection(db, "students");
+    const q = query(studentsRef, where("approved", "==", false));
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      emptyState.hidden = false;
+      approvalsTable.hidden = true;
+      return;
     }
 
-    // Initial load
-    await loadPending();
-
-    // Optionally, we could set up real-time subscription, but for Phase 2 we stick with polling on visible.
-    // For simplicity, we'll just provide a refresh button? Actually, we can add a pull-to-refresh or a button.
-    // Let's add a refresh button in the header.
-    const refreshBtn = document.createElement('button');
-    refreshBtn.textContent = 'Refresh';
-    refreshBtn.className = 'btn btn-secondary';
-    refreshBtn.style.marginLeft = '8px';
-    refreshBtn.addEventListener('click', loadPending);
-    // Insert into the header actions area
-    const headerActions = document.querySelector('.actions');
-    if (headerActions) {
-      headerActions.insertBefore(refreshBtn, headerActions.firstChild);
-    }
-
-    // Sign out via the shared nav button
-    document.getElementById('nav-sign-out').addEventListener('click', () => {
-      window.qrAttendanceAuth.signOut();
+    const students = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      students.push({
+        id: docSnap.id,
+        ...data
+      });
     });
+
+    // Sort by createdAt descending (newest first)
+    students.sort((a, b) => {
+      const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt?.seconds ? a.createdAt.seconds * 1000 : 0);
+      const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt?.seconds ? b.createdAt.seconds * 1000 : 0);
+      return timeB - timeA;
+    });
+
+    const limitedStudents = students.slice(0, 200);
+
+    approvalsTable.hidden = false;
+    limitedStudents.forEach((student) => {
+      const card = createStudentCard(student);
+      approvalsBody.appendChild(card);
+    });
+
+    if (students.length > 200) {
+      showStatus(`Showing 200 of ${students.length} pending registrations.`);
+    }
+  } catch (error) {
+    console.error("Failed to load pending registrations:", error);
+    showStatus("Failed to load pending registrations. Please try again.", true);
+    emptyState.hidden = true;
+    approvalsTable.hidden = true;
+  } finally {
+    setLoading(false);
+  }
+}
+
+// Handle approve action
+async function handleApprove(studentId, card) {
+  const approveButton = card.querySelector(".approve-button");
+  const rejectButton = card.querySelector(".reject-button");
+
+  approveButton.disabled = true;
+  rejectButton.disabled = true;
+  approveButton.textContent = "Approving…";
+
+  try {
+    const staff = getCurrentStaff();
+    if (!staff) {
+      throw new Error("Not authenticated");
+    }
+
+    const studentRef = doc(db, "students", studentId);
+    await updateDoc(studentRef, {
+      approved: true,
+      approvedAt: serverTimestamp(),
+      approvedBy: staff.uid
+    });
+
+    const { getDoc } = await import("https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js");
+    const updatedSnap = await getDoc(studentRef);
+    if (!updatedSnap.exists() || updatedSnap.data().approved !== true) {
+      throw new Error("Approval was not saved. Please try again.");
+    }
+
+    card.style.opacity = "0";
+    card.style.transform = "scale(0.96)";
+    card.style.transition = "opacity 200ms ease, transform 200ms ease";
+    setTimeout(() => {
+      card.remove();
+      checkEmptyState();
+    }, 200);
+
+    showStatus(`Approved: ${card.dataset.studentName}`);
+  } catch (error) {
+    console.error("Approve failed:", error);
+    let message = "Approval failed. Please try again.";
+    if (error.message && (error.message.includes("permission") || error.message.includes("denied"))) {
+      message = "You don't have permission to approve this registration.";
+    } else if (error.message && error.message.includes("not saved")) {
+      message = error.message;
+    }
+    showStatus(message, true);
+    approveButton.disabled = false;
+    rejectButton.disabled = false;
+    approveButton.textContent = "Approve";
+  }
+}
+
+// Handle reject action
+async function handleReject(studentId, card) {
+  const studentName = card.dataset.studentName || "Student";
+
+  if (!confirm(`Reject registration for "${studentName}"? This will permanently delete the record.`)) {
+    return;
   }
 
-  // Initialize when ready
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    init();
-  } else {
-    document.addEventListener('DOMContentLoaded', init);
-  }
-})();
+  const approveButton = card.querySelector(".approve-button");
+  const rejectButton = card.querySelector(".reject-button");
 
-// Helper: escape HTML
-function escapeHtml(str) {
-  return str.replace(/[&<>"']/g, m => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;',
-    '"': '&quot;', "'": '&#39;'
-  })[m]);
+  approveButton.disabled = true;
+  rejectButton.disabled = true;
+  rejectButton.textContent = "Rejecting…";
+
+  try {
+    const studentRef = doc(db, "students", studentId);
+    await deleteDoc(studentRef);
+
+    const { getDoc } = await import("https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js");
+    const deletedSnap = await getDoc(studentRef);
+    if (deletedSnap.exists()) {
+      throw new Error("Rejection was not saved. Please try again.");
+    }
+
+    card.style.opacity = "0";
+    card.style.transform = "scale(0.96)";
+    card.style.transition = "opacity 200ms ease, transform 200ms ease";
+    setTimeout(() => {
+      card.remove();
+      checkEmptyState();
+    }, 200);
+
+    showStatus(`Rejected: ${studentName}`);
+  } catch (error) {
+    console.error("Reject failed:", error);
+    let message = "Rejection failed. Please try again.";
+    if (error.message && (error.message.includes("permission") || error.message.includes("denied"))) {
+      message = "You don't have permission to reject this registration.";
+    } else if (error.message && error.message.includes("not saved")) {
+      message = error.message;
+    }
+    showStatus(message, true);
+    approveButton.disabled = false;
+    rejectButton.disabled = false;
+    rejectButton.textContent = "Reject";
+  }
+}
+
+function checkEmptyState() {
+  const cards = approvalsBody.querySelectorAll(".pending-card");
+  if (cards.length === 0) {
+    emptyState.hidden = false;
+    approvalsTable.hidden = true;
+  }
 }
